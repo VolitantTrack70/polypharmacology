@@ -95,36 +95,77 @@ services are healthy is a UI you cannot iterate on — and cannot demo.
 
 ### Full stack
 
-**Prerequisites:** Docker, Rust toolchain, Node 20+, Python 3.12 (via `uv`).
+**Prerequisites:** PostgreSQL 16, Rust toolchain, `protoc`, Node 20+, Python 3.12
+(via `uv`). On Windows:
 
 ```bash
-cp .env.example .env
+winget install PostgreSQL.PostgreSQL.16 Rustlang.Rustup Google.Protobuf OpenJS.NodeJS.LTS
 ```
 
-```bash
-docker compose up -d
-```
+Docker is **optional** — it is only needed for the Apache AGE graph overlay and
+Kafka, neither of which anything currently depends on. Migration `004` declares
+`-- requires-extension: age` and is skipped automatically on a stock Postgres.
+
+Copy `.env.example` to `.env` and set `DATABASE_URL`, then:
 
 ```bash
 cd services/ingest && uv venv --python 3.12 .venv && uv pip install --python .venv -e ".[dev]"
 ```
 
-Load a small slice end-to-end first — this takes about a minute and validates the
-whole pipeline before you commit to the multi-hour full ingest:
+Reactome is small and unlocks the pathway third of the cascade — do it first:
 
 ```bash
-cd services/ingest && .venv/Scripts/chemmed-ingest run-all --release 35 --limit 5000
-```
-
-Then the API and UI:
-
-```bash
-cd services/api && cargo run
+services/ingest/.venv/Scripts/chemmed-ingest download --source reactome
 ```
 
 ```bash
-cd services/web && npm install && npm run dev
+services/ingest/.venv/Scripts/chemmed-ingest migrate
 ```
+
+ChEMBL is a ~5 GB download expanding to tens of GB, so validate the pipeline on a
+slice before committing to it:
+
+```bash
+services/ingest/.venv/Scripts/chemmed-ingest run-all --release 35 --limit 5000
+```
+
+Similarity search works from the shell with no API or UI running — the fastest
+way to confirm the index is real:
+
+```bash
+services/ingest/.venv/Scripts/chemmed-ingest search "CC(=O)Oc1ccccc1C(=O)O"
+```
+
+Then the three services, each in its own terminal:
+
+```bash
+scripts\dev-chemworker.cmd
+```
+
+```bash
+scripts\dev-api.cmd
+```
+
+```bash
+scripts\dev-web.cmd
+```
+
+The scripts exist because each service has a non-obvious startup requirement —
+the worker needs generated protobuf stubs, the API must run from its own
+directory to find `.env`, and SvelteKit overrides Vite's `root` with `cwd`.
+
+### Tests
+
+```bash
+services/ingest/.venv/Scripts/python -m pytest
+```
+
+```bash
+cd services/api && cargo test
+```
+
+The Python suite includes loader integration tests that create and drop their own
+scratch database; they skip cleanly when Postgres is unreachable.
 
 ## Repository layout
 
