@@ -88,9 +88,21 @@ def load_table(
 
     with conn.cursor() as cur:
         cur.execute(f"DROP TABLE IF EXISTS {staging}")
-        # LIKE ... copies column types but not constraints -- exactly what we
-        # want, since filtering the constraint violations is the whole point.
-        cur.execute(f"CREATE UNLOGGED TABLE {staging} (LIKE chem.{table})")
+        # `CREATE TABLE AS SELECT ... WITH NO DATA`, not `LIKE`.
+        #
+        # `LIKE` copies NOT NULL constraints but NOT defaults, which is the
+        # worst possible combination: a column such as compound.withdrawn_flag
+        # (NOT NULL DEFAULT FALSE) becomes mandatory in staging with nothing to
+        # fill it, so any Parquet that omits the column fails the COPY.
+        #
+        # AS SELECT gives the same column types with no constraints at all.
+        # Staging should accept whatever the Parquet holds; validation happens
+        # on the way into the real table, where the real defaults do apply
+        # because the INSERT only names columns the Parquet actually has.
+        cur.execute(
+            f"CREATE UNLOGGED TABLE {staging} AS "
+            f"SELECT * FROM chem.{table} WITH NO DATA"
+        )
 
         copied = 0
         first = True
