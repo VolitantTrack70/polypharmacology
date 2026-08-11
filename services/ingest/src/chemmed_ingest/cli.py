@@ -22,8 +22,11 @@ from chemmed_ingest.config import DATABASE_URL, FP, PATHS, REPO_ROOT, THRESHOLDS
 
 app = typer.Typer(add_completion=False, help="Polypharmacology graph ingestion pipeline.")
 console = Console()
+log = logging.getLogger(__name__)
 
-CHEMBL_URL = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_{v}/chembl_{v}_sqlite.tar.gz"
+CHEMBL_BASE = "https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/releases/chembl_{v}"
+CHEMBL_URL = CHEMBL_BASE + "/chembl_{v}_sqlite.tar.gz"
+CHEMBL_CHECKSUMS = CHEMBL_BASE + "/checksums.txt"
 REACTOME_BASE = "https://reactome.org/download/current"
 REACTOME_FILES = [
     "ReactomePathways.txt",
@@ -39,6 +42,83 @@ def _setup_logging(verbose: bool = True) -> None:
         datefmt="[%X]",
         handlers=[RichHandler(console=console, rich_tracebacks=True, show_path=False)],
     )
+
+
+def _sha256(path: Path, chunk: int = 1 << 22) -> str:
+    """Streaming SHA-256. The file is multiple GB; it is not read into memory."""
+    import hashlib
+
+    from tqdm import tqdm
+
+    digest = hashlib.sha256()
+    size = path.stat().st_size
+    with open(path, "rb") as fh, tqdm(
+        total=size, unit="B", unit_scale=True, desc=f"sha256 {path.name}"
+    ) as bar:
+        while block := fh.read(chunk):
+            digest.update(block)
+            bar.update(len(block))
+    return digest.hexdigest()
+
+
+def find_checksum(text: str, filename: str) -> str | None:
+    """Pull a file's SHA-256 out of a checksums manifest.
+
+    ChEMBL's format is `<sha256>\\tchembl_35_sqlite.tar.gz`, but coreutils
+    conventions vary -- whitespace may be spaces or a tab, and binary-mode
+    entries prefix the name with '*'. Filenames may also carry a directory
+    prefix. Only 64-hex-character digests are accepted, so an MD5 line for the
+    same file is not silently compared against a SHA-256.
+    """
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name = parts[-1].lstrip("*").replace("\\", "/").rsplit("/", 1)[-1]
+        if name != filename:
+            continue
+        digest = parts[0].strip()
+        if len(digest) == 64 and all(c in "0123456789abcdefABCDEF" for c in digest):
+            return digest
+    return None
+
+
+def verify_chembl_checksum(tarball: Path, release: str) -> bool | None:
+    """Check the tarball against ChEMBL's published SHA-256.
+
+    Returns True on match, False on mismatch, None when the checksum could not
+    be obtained (offline, file moved, format changed). A missing checksum is
+    not treated as a failure -- refusing to proceed because a convenience file
+    is unreachable would be worse than the risk it guards against.
+
+    Worth doing: a truncated or corrupted multi-GB download otherwise surfaces
+    as an inscrutable SQLite error hours later, during parse.
+    """
+    import requests
+
+    try:
+        resp = requests.get(CHEMBL_CHECKSUMS.format(v=release), timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        log.warning("could not fetch checksums.txt (%s); skipping verification", exc)
+        return None
+
+    expected = find_checksum(resp.text, tarball.name)
+    if expected is None:
+        log.warning("no SHA-256 entry for %s in checksums.txt; skipping", tarball.name)
+        return None
+
+    actual = _sha256(tarball)
+    if actual.lower() == expected.lower():
+        console.print(f"[green]checksum OK[/green] {tarball.name}")
+        return True
+
+    console.print(
+        f"[red]CHECKSUM MISMATCH[/red] for {tarball.name}\n"
+        f"  expected {expected}\n"
+        f"  actual   {actual}"
+    )
+    return False
 
 
 def _chembl_sqlite_path(release: str) -> Path | None:
@@ -92,6 +172,9 @@ def _chembl_sqlite_path(release: str) -> Path | None:
 def download(
     source: str = typer.Option("all", help="chembl | reactome | all"),
     release: str = typer.Option("35", help="ChEMBL release number"),
+    verify: bool = typer.Option(
+        True, help="Check the ChEMBL tarball against its published SHA-256 before extracting."
+    ),
 ) -> None:
     """Fetch source dumps into data/raw. Resumable; skips files already present."""
     _setup_logging()
@@ -130,6 +213,11 @@ def download(
         if existing is not None:
             console.print(f"[dim]have[/dim] {existing}")
         else:
+            if verify and verify_chembl_checksum(tarball, release) is False:
+                raise typer.BadParameter(
+                    f"{tarball.name} is corrupt. Delete it and re-run download."
+                )
+
             console.print(
                 f"[cyan]extracting[/cyan] {tarball.name} "
                 f"(expands to tens of GB; this takes a while)"
