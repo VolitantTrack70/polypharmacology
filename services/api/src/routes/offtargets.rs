@@ -31,7 +31,22 @@ pub struct OffTargetRequest {
     pub limit: Option<u32>,
     /// Restrict to a single organism, e.g. "Homo sapiens".
     pub organism: Option<String>,
+    /// Which level of the Reactome hierarchy to return.
+    ///
+    /// `specific` (default) drops the top-level umbrella pathways -- "Disease",
+    /// "Signal Transduction" -- which are true of almost every protein and tell
+    /// a researcher nothing. `domain` returns only those umbrellas, for a
+    /// high-level summary. `all` returns everything.
+    pub pathway_scope: Option<String>,
+    /// Cap on pathways returned per target, most specific first.
+    ///
+    /// We ingest Reactome's All_Levels mapping, so a well-studied protein is
+    /// genuinely annotated to dozens of pathways -- ABL1 alone returns ~52.
+    /// Returning all of them is correct and unreadable.
+    pub max_pathways_per_target: Option<u32>,
 }
+
+const PATHWAY_SCOPES: [&str; 3] = ["all", "domain", "specific"];
 
 #[derive(Serialize)]
 pub struct OffTargetResponse {
@@ -102,27 +117,53 @@ pub struct CascadeRow {
 
 pub const QUERY_NODE_ID: &str = "__query__";
 
+/// The scope predicate sits in the LEFT JOIN condition, not the WHERE clause.
+/// In the WHERE clause it would discard targets whose pathways were all
+/// filtered out, turning "this target has no pathway at this level" into
+/// "this target does not exist".
+///
+/// Likewise the per-target cap is applied via ROW_NUMBER in an outer filter
+/// that explicitly keeps `reactome_id IS NULL` rows, so an unannotated target
+/// still comes back as a node.
 const CASCADE_SQL: &str = r#"
 WITH hits AS (
     SELECT * FROM UNNEST($1::text[]) AS t(chembl_id)
+),
+ranked AS (
+    SELECT
+        b.chembl_id,
+        b.target_chembl_id,
+        t.pref_name,
+        t.organism,
+        b.max_pchembl,
+        b.n_measurements,
+        b.activity_types,
+        tp.reactome_id,
+        tp.pathway_name,
+        tp.biological_domain,
+        ROW_NUMBER() OVER (
+            PARTITION BY b.target_chembl_id
+            ORDER BY tp.depth_from_root DESC, tp.pathway_name
+        ) AS rn
+    FROM hits h
+    JOIN chem.binds_to b ON b.chembl_id = h.chembl_id
+    JOIN chem.target   t ON t.target_chembl_id = b.target_chembl_id
+    LEFT JOIN chem.target_pathway tp
+           ON tp.target_chembl_id = b.target_chembl_id
+          AND (
+                $4 = 'all'
+             OR ($4 = 'domain'   AND tp.is_top_level)
+             OR ($4 = 'specific' AND NOT tp.is_top_level)
+              )
+    WHERE b.max_pchembl >= $2
+      AND ($3::text IS NULL OR t.organism = $3)
 )
 SELECT
-    b.chembl_id,
-    b.target_chembl_id,
-    t.pref_name,
-    t.organism,
-    b.max_pchembl,
-    b.n_measurements,
-    b.activity_types,
-    tp.reactome_id,
-    tp.pathway_name,
-    tp.biological_domain
-FROM hits h
-JOIN chem.binds_to b       ON b.chembl_id = h.chembl_id
-JOIN chem.target   t       ON t.target_chembl_id = b.target_chembl_id
-LEFT JOIN chem.target_pathway tp ON tp.target_chembl_id = b.target_chembl_id
-WHERE b.max_pchembl >= $2
-  AND ($3::text IS NULL OR t.organism = $3)
+    chembl_id, target_chembl_id, pref_name, organism,
+    max_pchembl, n_measurements, activity_types,
+    reactome_id, pathway_name, biological_domain
+FROM ranked
+WHERE reactome_id IS NULL OR rn <= $5
 "#;
 
 /// Result of folding the fanned-out SQL rows into a deduplicated graph.
@@ -260,6 +301,19 @@ pub async fn off_targets(
         return Err(ApiError::BadRequest("tanimoto must be in (0, 1]".into()));
     }
 
+    let scope = req
+        .pathway_scope
+        .clone()
+        .unwrap_or_else(|| "specific".to_string());
+    if !PATHWAY_SCOPES.contains(&scope.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "pathway_scope must be one of {PATHWAY_SCOPES:?}, got {scope:?}"
+        )));
+    }
+    // Clamped rather than rejected: a caller asking for 10_000 pathways per
+    // target wants "all of them", not an error.
+    let max_pathways = req.max_pathways_per_target.unwrap_or(8).clamp(1, 500) as i64;
+
     // ---- Phase 1: similarity ------------------------------------------------
     let search = match (&req.smiles, &req.chembl_id) {
         (Some(s), _) if !s.trim().is_empty() => {
@@ -311,6 +365,8 @@ pub async fn off_targets(
         .bind(&hit_ids)
         .bind(pchembl)
         .bind(req.organism.as_deref())
+        .bind(&scope)
+        .bind(max_pathways)
         .fetch_all(&state.db)
         .await?;
 

@@ -37,14 +37,30 @@ impl IntoResponse for ApiError {
             ApiError::InvalidStructure(m) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, "invalid_structure", m.clone())
             }
-            ApiError::ChemWorker(status) => {
-                tracing::error!(error = %status, "chemworker call failed");
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "chemworker_unavailable",
-                    "The cheminformatics service is not responding.".to_string(),
-                )
-            }
+            // Not every gRPC failure is an outage. The worker aborts with
+            // INVALID_ARGUMENT when the user's SMILES cannot be parsed -- that
+            // is a fact about the input, and reporting it as "service
+            // unavailable" tells someone with a typo that our server is broken.
+            ApiError::ChemWorker(status) => match status.code() {
+                tonic::Code::InvalidArgument => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invalid_structure",
+                    status.message().to_string(),
+                ),
+                tonic::Code::NotFound => (
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    status.message().to_string(),
+                ),
+                code => {
+                    tracing::error!(error = %status, ?code, "chemworker call failed");
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "chemworker_unavailable",
+                        "The cheminformatics service is not responding.".to_string(),
+                    )
+                }
+            },
             ApiError::Database(err) => {
                 tracing::error!(error = %err, "database query failed");
                 (
