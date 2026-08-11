@@ -1,4 +1,4 @@
-"""gRPC cheminformatics service.
+﻿"""gRPC cheminformatics service.
 
 Holds the fingerprint index in memory and answers similarity queries. This is
 the only process that touches RDKit at request time.
@@ -136,7 +136,7 @@ class ChemWorkerServicer(pb_grpc.ChemWorkerServicer):
 
 
 def _load_index() -> FingerprintIndex:
-    path = PATHS.fpsim_index.with_suffix(".npz")
+    path = PATHS.fingerprint_index
     if not path.exists():
         raise SystemExit(
             f"fingerprint index not found at {path}.\n"

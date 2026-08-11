@@ -1,4 +1,4 @@
-"""Command-line entry point for the ingestion pipeline.
+﻿"""Command-line entry point for the ingestion pipeline.
 
     download -> parse -> fingerprint -> load -> index -> project-graph
 
@@ -281,7 +281,7 @@ def index(
         raise typer.BadParameter(f"no fingerprints found in {source}")
 
     idx = FingerprintIndex.from_records(records)
-    path = PATHS.fpsim_index.with_suffix(".npz")
+    path = PATHS.fingerprint_index
     idx.save(path)
     console.print(f"[green]{idx}[/green] -> {path}")
 
@@ -297,7 +297,7 @@ def search(
     from chemmed_ingest.chem.fingerprint import fingerprint_bytes, standardize
     from chemmed_ingest.chem.similarity import FingerprintIndex
 
-    path = PATHS.fpsim_index.with_suffix(".npz")
+    path = PATHS.fingerprint_index
     if not path.exists():
         raise typer.BadParameter(f"{path} not found -- run `index` first")
 
