@@ -62,12 +62,27 @@ class Thresholds:
     min_confidence: int = int(_env("MIN_CONFIDENCE_SCORE", "7"))
 
 
+def _path_env(key: str, default: Path) -> Path:
+    """Resolve a path from the environment, anchoring relatives to the repo root.
+
+    A bare `./data/processed` in .env would otherwise resolve against whatever
+    directory the command happened to be run from -- so `parse` (run from the
+    repo root) and `load` (run from services/ingest) would silently disagree
+    about where the Parquet lives.
+    """
+    raw = os.environ.get(key)
+    if not raw:
+        return default
+    path = Path(raw)
+    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+
+
 @dataclass(frozen=True)
 class Paths:
-    raw: Path = Path(_env("DATA_RAW_DIR", str(REPO_ROOT / "data" / "raw")))
-    processed: Path = Path(_env("DATA_PROCESSED_DIR", str(REPO_ROOT / "data" / "processed")))
-    fpsim_index: Path = Path(
-        _env("FPSIM2_INDEX_PATH", str(REPO_ROOT / "data" / "processed" / "chembl_morgan_2048.h5"))
+    raw: Path = _path_env("DATA_RAW_DIR", REPO_ROOT / "data" / "raw")
+    processed: Path = _path_env("DATA_PROCESSED_DIR", REPO_ROOT / "data" / "processed")
+    fpsim_index: Path = _path_env(
+        "FPSIM2_INDEX_PATH", REPO_ROOT / "data" / "processed" / "chembl_morgan_2048.h5"
     )
 
     def ensure(self) -> None:

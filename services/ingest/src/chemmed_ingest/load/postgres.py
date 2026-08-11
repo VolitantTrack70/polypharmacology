@@ -53,6 +53,10 @@ _LOAD_SPEC: dict[str, dict[str, Any]] = {
         "pk": ["uniprot_accession", "reactome_id"],
         "guards": [("reactome_id", "pathway", "reactome_id")],
     },
+    "compound_fingerprint": {
+        "pk": ["chembl_id"],
+        "guards": [("chembl_id", "compound", "chembl_id")],
+    },
 }
 
 
@@ -117,9 +121,21 @@ def load_table(
         select_cols = ", ".join(f"s.{c}" for c in columns)
         conflict = ", ".join(spec["pk"])
 
+        # Only stamp provenance on tables that actually carry it -- the pure
+        # join tables (target_component, pathway_hierarchy, protein_pathway,
+        # compound_fingerprint) have no release_id column.
         if release_id is not None and "release_id" not in columns:
-            collist += ", release_id"
-            select_cols += f", {int(release_id)}"
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'chem' AND table_name = %s
+                  AND column_name = 'release_id'
+                """,
+                (table,),
+            )
+            if cur.fetchone() is not None:
+                collist += ", release_id"
+                select_cols += f", {int(release_id)}"
 
         cur.execute(
             f"INSERT INTO chem.{table} ({collist}) "
@@ -181,18 +197,62 @@ def refresh_derived(conn: psycopg.Connection) -> None:
     conn.commit()
 
 
-def apply_migrations(conn: psycopg.Connection, migrations_dir: Path) -> list[str]:
+REQUIRES_MARKER = "-- requires-extension:"
+
+
+def _required_extension(sql: str) -> str | None:
+    """Read an optional `-- requires-extension: <name>` marker from a migration."""
+    for line in sql.splitlines()[:20]:
+        if line.strip().startswith(REQUIRES_MARKER):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _extension_available(conn: psycopg.Connection, name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_available_extensions WHERE name = %s", (name,))
+        return cur.fetchone() is not None
+
+
+def apply_migrations(
+    conn: psycopg.Connection, migrations_dir: Path
+) -> tuple[list[str], list[tuple[str, str]]]:
     """Run every .sql in `db/migrations` in filename order.
 
-    Migrations are written to be idempotent, so re-running is safe. AGE's
-    `LOAD 'age'` is session-scoped, hence one statement block per file.
+    Migrations are idempotent, so re-running is safe.
+
+    A migration may declare `-- requires-extension: <name>`. If that extension
+    isn't available on the server it is SKIPPED rather than failing the run.
+    This is what lets the pipeline work against a stock Postgres without Apache
+    AGE -- the relational layer is the system of record and answers every
+    current query, so the graph overlay is genuinely optional.
+
+    Returns (applied, skipped) where skipped is [(filename, reason)].
     """
-    applied = []
+    applied: list[str] = []
+    skipped: list[tuple[str, str]] = []
+
     for path in sorted(migrations_dir.glob("*.sql")):
-        log.info("applying %s", path.name)
         sql = path.read_text(encoding="utf-8")
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.commit()
+
+        required = _required_extension(sql)
+        if required and not _extension_available(conn, required):
+            reason = f"extension {required!r} not available on this server"
+            log.warning("skipping %s: %s", path.name, reason)
+            skipped.append((path.name, reason))
+            continue
+
+        log.info("applying %s", path.name)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            conn.commit()
+        except psycopg.Error:
+            # Leave the connection usable so later migrations can still run,
+            # then re-raise -- a failed migration is not something to swallow.
+            conn.rollback()
+            log.error("migration %s failed", path.name)
+            raise
         applied.append(path.name)
-    return applied
+
+    return applied, skipped

@@ -1,55 +1,74 @@
 # What's done, what's next
 
-## Verified working
+## Verified working, end to end
+
+The pipeline runs for real against a live PostgreSQL 16 instance:
+
+```
+parse -> fingerprint -> index -> search        (no database needed)
+migrate -> load -> binds_to                    (against Postgres)
+```
 
 - **Cheminformatics core** — standardisation (desalting, neutralisation,
-  canonicalisation) and Morgan fingerprinting. Confirmed against real drugs:
-  imatinib mesylate collapses to the free base (Tanimoto 1.000).
-- **Similarity engine** — packed-uint64 index with exact popcount-bound pruning.
-  15 unit tests pass, including a check that the bound never drops a hit a brute
-  force scan would have kept.
-- **Threshold calibration** — measured, not assumed. See
-  [0002](decisions/0002-similarity-thresholds.md).
-- **ChEMBL + Reactome parsers** — stream to Parquet with explicit Arrow schemas.
-- **CLI** — all eight stages wired and loading cleanly; `ruff` clean.
+  canonicalisation) and Morgan fingerprinting. Imatinib mesylate collapses to
+  the free base (Tanimoto 1.000).
+- **Similarity search through the CLI, on real structures.** Querying imatinib
+  at cutoff 0.35 returns imatinib (1.000) and nilotinib (0.517). The same query
+  at the blueprint's original 0.85 returns **only imatinib** — the threshold
+  problem from [0002](decisions/0002-similarity-thresholds.md) now reproduces
+  in the actual product, not just a side script.
+- **ChEMBL parser** — 32 tests against a schema-accurate SQLite fixture
+  (`tests/chembl_fixture.py`), pinning down which joins are INNER vs LEFT and
+  which rows get dropped.
+- **Schema + quality filters.** Migrations 001–003 applied; `binds_to`
+  aggregation verified against hand-computed expectations:
+  - A compound/target pair with 4 raw activities counts **2** — the `>`-relation
+    row (a non-binder) and the low-confidence-assay row are correctly excluded.
+  - A pair whose raw maximum pChEMBL is 9.0 shows **7.0** in the view — the
+    row flagged with a `data_validity_comment` is correctly excluded.
+- **Idempotent loads.** Re-running `load` inserts 0 rows rather than erroring.
 
-## Written but not yet executed
+## Database setup as it actually stands
 
-Nothing here is broken as far as I know — it simply hasn't been run, because
-the toolchains aren't installed on this machine yet.
+PostgreSQL 16 is installed **natively**, not via Docker, so migration 004
+(Apache AGE) is **skipped automatically** — the runner detects the missing
+extension and reports it rather than failing.
+
+This costs nothing today. Per [0003](decisions/0003-postgres-over-neo4j.md) the
+relational tables are the system of record and answer every query the API
+makes; `project-graph` was never implemented, so the AGE graph would be empty
+regardless. `docker-compose.yml` still provisions the `apache/age` image for
+when Cypher is actually wanted.
+
+## Still written but unexecuted
 
 | Component | Blocked on | Likely first friction |
 |---|---|---|
-| Postgres schema (4 migrations) | Docker | AGE image tag; the property-index syntax in `004` is the least certain part |
 | Rust API | `cargo`, `protoc` | axum 0.8 path syntax; sqlx array binding in the `UNNEST` query |
 | chemworker gRPC server | `protoc` | Needs stubs generated before it will import |
-| SvelteKit UI | Node 20+ | `cytoscape-fcose` import shape under Vite SSR |
+| Apache AGE overlay | Docker | The property-index syntax in `004` is the least certain part |
+| Kafka fan-out | Docker | Provisioned but unused; fingerprinting uses a local process pool |
 
-## Suggested order
+## Suggested order from here
 
-1. **Install Docker**, `docker compose up -d`, then `chemmed-ingest migrate`.
-   This exercises the schema first, since everything downstream depends on it.
-2. **`chemmed-ingest run-all --limit 5000`.** A few thousand compounds end to
-   end proves the pipeline in about a minute. Do this before the full ingest.
-3. **`chemmed-ingest search "CC(=O)Oc1ccccc1C(=O)O"`.** Similarity search from
-   the shell, no API or UI needed — the fastest way to confirm the index is real.
-4. **Install Node, run the UI against a stubbed API** if you want to iterate on
-   the frontend before the Rust side compiles.
-5. **Rust last.** It is the layer with the least logic in it and the most
+1. **Real ChEMBL data.** `chemmed-ingest download --source chembl --release 35`
+   then `parse --limit 50000`. This is a ~5 GB download expanding to tens of GB,
+   so it is a deliberate decision rather than something to run casually.
+   Everything upstream of it is already proven on the fixture.
+2. **Reactome**, which is small (a few tens of MB) and unlocks the pathway third
+   of the cascade — currently the only part of the graph with no data at all.
+3. **Rust API**, once `cargo` and `protoc` are installed. Least logic, most
    toolchain setup.
 
 ## Known gaps worth tracking
 
-- **`project-graph` is not implemented.** The AGE migration creates the labels
-  but nothing populates them. The relational path answers every current query,
-  so this is not blocking — it matters when you want Cypher.
-- **UniProt ingestion is stubbed out.** ChEMBL supplies accessions, names, and
-  organism already; UniProt would only add clean gene symbols. Listed in the
-  blueprint, deliberately deferred as near-redundant.
-- **Kafka is provisioned but unused.** The fingerprint stage currently uses a
-  local process pool, which is the right tool for a single machine. The topics
-  and config exist for when fan-out across hosts is actually wanted.
-- **No auth on the API**, and CORS is permissive. Fine on localhost; both need
-  fixing before this is reachable from anywhere else.
-- **`known_name` in `/api/resolve` always returns null** — ChEMBL's preferred
-  compound names aren't loaded yet (`molecule_dictionary.pref_name`).
+- **Pathway data is entirely absent.** Reactome has not been downloaded, so
+  `target_pathway` is empty and the cascade currently stops at targets.
+- **`project-graph` is unimplemented.** Migration 004 creates labels; nothing
+  populates them.
+- **UniProt ingestion is stubbed.** ChEMBL supplies accessions, names and
+  organism already; UniProt would only add clean gene symbols.
+- **No auth on the API**, and CORS is permissive. Fine on localhost.
+- **`known_name` in `/api/resolve` always returns null** — ChEMBL's
+  `molecule_dictionary.pref_name` is parsed in the fixture but not yet loaded
+  into `chem.compound`.

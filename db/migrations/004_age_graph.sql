@@ -1,6 +1,12 @@
+-- requires-extension: age
 -- ============================================================================
 -- 004_age_graph.sql
 -- Apache AGE property-graph overlay.
+--
+-- SKIPPED AUTOMATICALLY when the `age` extension isn't installed (e.g. a stock
+-- Postgres rather than the apache/age image). Nothing downstream depends on
+-- it: the relational tables are the system of record and answer every query
+-- the API currently makes.
 --
 -- IMPORTANT -- what this graph is and isn't:
 --   * It is a PROJECTION of the relational tables. `chem.*` is the source of

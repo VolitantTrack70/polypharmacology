@@ -205,8 +205,11 @@ def migrate() -> None:
     from chemmed_ingest.load.postgres import apply_migrations
 
     with psycopg.connect(DATABASE_URL) as conn:
-        applied = apply_migrations(conn, REPO_ROOT / "db" / "migrations")
-    console.print(f"[green]applied {len(applied)} migrations[/green]: {', '.join(applied)}")
+        applied, skipped = apply_migrations(conn, REPO_ROOT / "db" / "migrations")
+
+    console.print(f"[green]applied {len(applied)}[/green]: {', '.join(applied) or '-'}")
+    for name, reason in skipped:
+        console.print(f"[yellow]skipped[/yellow] {name} ({reason})")
 
 
 @app.command(name="load")
@@ -236,19 +239,40 @@ def load_cmd(release: str = typer.Option("35")) -> None:
 
 
 @app.command()
-def index() -> None:
-    """Build the packed fingerprint matrix used for query-time similarity."""
-    _setup_logging()
-    import psycopg
+def index(
+    source: str = typer.Option(
+        "parquet",
+        help="parquet | db. Parquet needs no database and is the default.",
+    ),
+) -> None:
+    """Build the packed fingerprint matrix used for query-time similarity.
 
+    Reads from the Parquet produced by `fingerprint` by default -- the index is
+    derived data and there is no reason to route it through Postgres. `--source
+    db` exists for rebuilding after a load that came from somewhere else.
+    """
+    _setup_logging()
     from chemmed_ingest.chem.similarity import FingerprintIndex
 
-    with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
-        cur.execute("SELECT chembl_id, fp FROM chem.compound_fingerprint")
-        records = [(r[0], bytes(r[1])) for r in cur]
+    if source == "parquet":
+        import polars as pl
+
+        src = PATHS.processed / "compound_fingerprint.parquet"
+        if not src.exists():
+            raise typer.BadParameter(f"{src} not found -- run `fingerprint` first")
+        df = pl.read_parquet(src, columns=["chembl_id", "fp"])
+        records = list(zip(df["chembl_id"].to_list(), df["fp"].to_list(), strict=True))
+    elif source == "db":
+        import psycopg
+
+        with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
+            cur.execute("SELECT chembl_id, fp FROM chem.compound_fingerprint")
+            records = [(r[0], bytes(r[1])) for r in cur]
+    else:
+        raise typer.BadParameter(f"unknown source {source!r}; use 'parquet' or 'db'")
 
     if not records:
-        raise typer.BadParameter("no fingerprints in the database -- run `load` first")
+        raise typer.BadParameter(f"no fingerprints found in {source}")
 
     idx = FingerprintIndex.from_records(records)
     path = PATHS.fpsim_index.with_suffix(".npz")
