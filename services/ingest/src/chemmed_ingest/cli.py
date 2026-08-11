@@ -41,8 +41,48 @@ def _setup_logging(verbose: bool = True) -> None:
     )
 
 
-def _chembl_sqlite_path(release: str) -> Path:
-    return PATHS.raw / f"chembl_{release}" / f"chembl_{release}_sqlite" / f"chembl_{release}.db"
+def _chembl_sqlite_path(release: str) -> Path | None:
+    """Locate the extracted ChEMBL SQLite file.
+
+    Searched rather than assumed. The tarball carries its own directory
+    structure (`chembl_35/chembl_35_sqlite/chembl_35.db`), so extracting it
+    into a directory we also named `chembl_35` yields a doubled path -- and
+    the layout has not been identical across releases anyway. Guessing wrong
+    here means discovering it only after a multi-GB download and a 25 GB
+    extraction.
+
+    Returns None when nothing matching is found.
+    """
+    expected = f"chembl_{release}.db"
+
+    # Cheap exact hits first, then fall back to a recursive search.
+    candidates = [
+        PATHS.raw / f"chembl_{release}" / f"chembl_{release}_sqlite" / expected,
+        PATHS.raw
+        / f"chembl_{release}"
+        / f"chembl_{release}"
+        / f"chembl_{release}_sqlite"
+        / expected,
+        PATHS.raw / f"chembl_{release}_sqlite" / expected,
+        PATHS.raw / expected,
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+
+    found = sorted(PATHS.raw.rglob(expected))
+    if found:
+        # Largest wins: the real database, not a stray journal or partial file.
+        return max(found, key=lambda p: p.stat().st_size)
+
+    # Last resort: any .db under the release directory.
+    release_dir = PATHS.raw / f"chembl_{release}"
+    if release_dir.exists():
+        any_db = sorted(release_dir.rglob("*.db"))
+        if any_db:
+            return max(any_db, key=lambda p: p.stat().st_size)
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +122,30 @@ def download(
         url = CHEMBL_URL.format(v=release)
         tarball = PATHS.raw / f"chembl_{release}_sqlite.tar.gz"
         fetch(url, tarball)
-        target = PATHS.raw / f"chembl_{release}"
-        if not target.exists():
-            console.print(f"[cyan]extracting[/cyan] {tarball.name} (this takes a while)")
+
+        # Keyed on the database file, not on a directory existing. A directory
+        # is created the moment extraction starts, so the old guard would treat
+        # an interrupted 25 GB extraction as complete and then fail at parse.
+        existing = _chembl_sqlite_path(release)
+        if existing is not None:
+            console.print(f"[dim]have[/dim] {existing}")
+        else:
+            console.print(
+                f"[cyan]extracting[/cyan] {tarball.name} "
+                f"(expands to tens of GB; this takes a while)"
+            )
+            # Extracted into data/raw, not a directory we also named
+            # chembl_<release> -- the tarball supplies that level itself.
             with tarfile.open(tarball) as tf:
-                tf.extractall(target, filter="data")
+                tf.extractall(PATHS.raw, filter="data")
+
+            found = _chembl_sqlite_path(release)
+            if found is None:
+                raise typer.BadParameter(
+                    f"extraction finished but no chembl_{release}.db was found under "
+                    f"{PATHS.raw}. Inspect the archive layout."
+                )
+            console.print(f"[green]extracted[/green] {found}")
 
     if source in ("reactome", "all"):
         for name in REACTOME_FILES:
@@ -109,10 +168,15 @@ def parse(
     counts: dict[str, int] = {}
 
     sqlite_path = _chembl_sqlite_path(release)
-    if sqlite_path.exists():
+    if sqlite_path is not None:
+        console.print(f"[dim]ChEMBL database:[/dim] {sqlite_path}")
         counts |= chembl.export_all(sqlite_path, PATHS.processed, limit=limit)
     else:
-        console.print(f"[yellow]skipping ChEMBL: {sqlite_path} not found[/yellow]")
+        console.print(
+            f"[yellow]skipping ChEMBL: no chembl_{release}.db found under "
+            f"{PATHS.raw}[/yellow]\n"
+            f"[dim]run `chemmed-ingest download --source chembl --release {release}` first[/dim]"
+        )
 
     if (PATHS.raw / "ReactomePathways.txt").exists():
         counts |= reactome.export_all(PATHS.raw, PATHS.processed, species=species or None)
