@@ -8,69 +8,90 @@ All three services run together and answer a real query end to end:
 POST /api/offtargets  { smiles: <imatinib>, tanimoto: 0.35 }
   -> 2 similar compounds (imatinib 1.000, nilotinib 0.517)
   -> 3 human targets (ABL1, KIT, PDGFRA)
-  -> 100 Reactome pathways
-  -> 106 nodes / 126 edges in ~2 ms
+  -> 16 Reactome pathways (default scope), 22 nodes / 23 edges, ~2 ms
 ```
 
-The non-human target is correctly excluded by the organism filter, and
-`/api/resolve` identifies a pasted structure as `CHEMBL941 / IMATINIB`.
+`/api/resolve` identifies a pasted structure as `CHEMBL941 / IMATINIB`, and the
+non-human target is correctly excluded by the organism filter.
 
 | Component | State |
 |---|---|
-| Ingest pipeline (Python + RDKit) | Running. 42 tests. |
-| PostgreSQL 16 schema + views | Running. Migrations 001–003, 005 applied. |
-| chemworker (Python gRPC) | Running on `:50051`. |
+| Ingest pipeline (Python + RDKit) | Running. 73 tests. |
+| PostgreSQL 16 schema + views | Running. Migrations 001–003, 005–006 applied. |
+| chemworker (Python gRPC) | Running on `:50051`. 17 tests. |
 | Rust API (axum 0.8) | Running on `:8080`. 11 tests. |
-| SvelteKit UI | Running on `:5173`, confirmed against the live API. |
+| SvelteKit UI | Running on `:5173`, verified against the live API. |
+| CI (GitHub Actions) | Green. Three parallel jobs. |
 | Reactome data | Loaded: 2,883 pathways, 142,108 protein–pathway links. |
 | ChEMBL data | **Fixture only.** Real download in progress. |
 | Apache AGE overlay | Skipped — needs Docker. Nothing depends on it. |
 | Kafka | Provisioned, unused. Fingerprinting uses a local process pool. |
 
+**101 tests total.** Run them with `pytest` in each Python service and
+`cargo test` in `services/api`.
+
 ## The finding that mattered
 
-The threshold problem now reproduces in the product, not a side script:
+The threshold problem reproduces in the product, not a side script:
 
 ```
 search <imatinib> --threshold 0.35  ->  imatinib 1.000, nilotinib 0.517
 search <imatinib> --threshold 0.85  ->  imatinib only
 ```
 
-At the blueprint's original 0.85, the textbook polypharmacology pair is
-invisible. See [0002](decisions/0002-similarity-thresholds.md).
+At the blueprint's original 0.85 the textbook polypharmacology pair is
+invisible. See [0002](decisions/0002-similarity-thresholds.md). This is now
+pinned by tests at three levels: the servicer, the API, and the e2e suite.
+
+## Measured, not assumed
+
+[0001](decisions/0001-query-time-similarity.md) claimed the index would be
+~600 MB and scan sub-second. `benchmarks/bench_similarity.py` confirms it —
+**624 MB, 214–516 ms** across thresholds at 2.4M compounds.
+
+It also **falsified** part of the same ADR. The claim that the popcount bound
+"discards 70–90% of the database" holds only at high thresholds; at the default
+0.40 it prunes **0%**, because drug-like molecules have similar bit counts. The
+ADR now says so. The prune stays (free, exact, helps where cost is highest) but
+it is not what makes the search fast.
 
 ## Bugs that only surfaced by running things
 
-Worth recording, because each was invisible to inspection:
+Each was invisible to inspection:
 
 1. **`biological_domain` was NULL for all 2,883 pathways.** Migration 003's
    denormalising UPDATE runs once, against a table still empty at migration
-   time. Worse, `refresh_derived` rebuilt `target_pathway` (which reads that
-   column) *before* `pathway_domain` computed it. Refresh is now explicitly
-   ordered.
+   time — and `refresh_derived` rebuilt `target_pathway` (which reads that
+   column) *before* `pathway_domain` computed it.
 2. **Staging tables silently required every column.** `CREATE TABLE (LIKE ...)`
-   copies NOT NULL but *not* defaults, so `withdrawn_flag NOT NULL DEFAULT
-   FALSE` became mandatory-with-no-default and any Parquet omitting it failed
-   the COPY. Now `CREATE TABLE AS SELECT ... WITH NO DATA`.
-3. **Re-ingest silently ignored updates.** `ON CONFLICT DO NOTHING` meant a
-   newer ChEMBL release would never refresh a corrected structure. Now upserts.
-4. **A healthy database reported itself down.** `SELECT 1` is INT4; it was being
-   decoded as `i64`.
+   copies NOT NULL but *not* defaults.
+3. **Re-ingest silently ignored updates** — `ON CONFLICT DO NOTHING` meant a
+   newer release would never refresh a corrected structure.
+4. **A healthy database reported itself down** — `SELECT 1` is INT4, decoded as
+   `i64`.
 5. **Relative `DATA_*` paths resolved against cwd**, so `parse` and `load`
-   disagreed about where the Parquet lived depending on where they were run.
+   disagreed about where the Parquet lived.
 6. **grpcio emits a flat `import chemworker_pb2`** that cannot resolve inside a
-   package — the worker could not import at all. `gen_proto.py` patches it.
+   package — the worker could not import at all.
+7. **A typo'd SMILES returned 503 "service not responding"** instead of 422.
+8. **The fingerprint stage materialised all 2.4M results** via `pool.starmap`,
+   and the progress bar would have sat at 0% for an hour then jumped to 100%.
+9. **`FPSIM2_INDEX_PATH` defaulted to `.h5`** while every call site rewrote it
+   to `.npz` — a config option that quietly ignored what you set.
 
 ## Next
 
-1. **Finish the ChEMBL ingest.** The download is running. Afterwards:
-   `parse --release 35`, then `fingerprint` (~2.4M structures, expect
-   20–60 min across a process pool), `load`, `index`.
-2. **Pathway noise.** ABL1 alone maps to ~52 pathways, so the cascade graph is
-   visually dense. Rolling up to `biological_domain` by default, with
-   drill-down, would help more than any styling change.
-3. **`project-graph` is still unimplemented** — migration 004 creates AGE labels
-   but nothing populates them. Only matters if you want Cypher.
-4. **No auth, permissive CORS.** Fine on localhost, not beyond it.
-5. **UniProt ingestion still stubbed.** ChEMBL already supplies accessions,
+1. **Finish the ChEMBL ingest.** Download running. Then `parse --release 35`,
+   `fingerprint` (~2.4M structures, 20–60 min), `load`, `index`. The parser now
+   preflights the schema, so a release mismatch fails in seconds rather than
+   hours in.
+2. **Re-run the benchmark against the real index** — real ChEMBL has a wider
+   popcount distribution than the synthetic set, so pruning at 0.40 should beat
+   0%. Worth recording the true figure in ADR 0001.
+3. **Expose `pathway_scope` in the UI.** The API supports it; the UI still uses
+   the default.
+4. **`project-graph` is unimplemented** — migration 004 creates AGE labels but
+   nothing populates them. Only matters if you want Cypher.
+5. **No auth, permissive CORS.** Fine on localhost, not beyond it.
+6. **UniProt ingestion still stubbed.** ChEMBL already supplies accessions,
    names and organism; UniProt would only add clean gene symbols.

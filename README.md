@@ -183,7 +183,13 @@ data/               Source dumps and intermediates. Git-ignored.
 
 ## Status
 
-Early. Schema, cheminformatics core, and ChEMBL parser are implemented and
-tested; the similarity engine has full unit coverage including an exactness
-check of the pruning bound against brute force. The API and UI are scaffolded.
-See the tracking notes in `docs/` for what's next.
+The full stack runs. A query for imatinib returns its structural analogues,
+their known protein targets, and the pathways those sit in — through the
+SvelteKit UI, the Rust API, the gRPC worker and Postgres, in about 2 ms.
+
+**101 tests**: 73 ingest (including 24 end-to-end against the running stack and
+loader integration tests against a real Postgres), 17 chemworker, 11 API.
+
+Reactome is fully loaded (2,883 human pathways, 142k protein–pathway links).
+ChEMBL currently runs on a schema-accurate fixture; the real ingest is the next
+step. See [docs/NEXT.md](docs/NEXT.md) for the current state and known gaps.
