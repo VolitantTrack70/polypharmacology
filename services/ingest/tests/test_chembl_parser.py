@@ -7,6 +7,8 @@ until something silently loses data. These tests pin them down.
 
 from __future__ import annotations
 
+import sqlite3
+
 import polars as pl
 import pytest
 
@@ -158,3 +160,91 @@ def chembl_targets():
     from .chembl_fixture import TARGETS
 
     return TARGETS
+
+
+class TestSchemaResilience:
+    """ChEMBL's schema drifts between releases.
+
+    A mismatch must surface in seconds with a clear message, not several hours
+    into a run after a 5 GB download and a 25 GB extraction.
+    """
+
+    def _fixture(self, tmp_path, mutate: str | None = None):
+        db = build_fixture(tmp_path / "mutated.db")
+        if mutate:
+            conn = sqlite3.connect(db)
+            try:
+                conn.executescript(mutate)
+                conn.commit()
+            finally:
+                conn.close()
+        return db
+
+    def test_missing_optional_column_becomes_null(self, tmp_path):
+        """withdrawn_flag has moved around across releases. Losing it should
+        cost that one field, not the whole ingest."""
+        db = self._fixture(tmp_path, "ALTER TABLE molecule_dictionary DROP COLUMN withdrawn_flag;")
+        out = tmp_path / "out"
+        chembl.export_table(db, "compound", out)
+
+        df = pl.read_parquet(out / "compound.parquet")
+        assert df.height == 5, "compounds must still export"
+        assert "withdrawn_flag" in df.columns, "schema shape must stay stable"
+        assert df["withdrawn_flag"].null_count() == df.height
+
+    def test_missing_optional_property_column_becomes_null(self, tmp_path):
+        db = self._fixture(tmp_path, "ALTER TABLE compound_properties DROP COLUMN alogp;")
+        out = tmp_path / "out"
+        chembl.export_table(db, "compound", out)
+
+        df = pl.read_parquet(out / "compound.parquet")
+        assert df["alogp"].null_count() == df.height
+        # Neighbouring columns must be unaffected.
+        assert df.filter(pl.col("chembl_id") == "CHEMBL941")["mw_freebase"][0] is not None
+
+    def test_missing_required_table_is_rejected_up_front(self, tmp_path):
+        db = self._fixture(tmp_path, "DROP TABLE activities;")
+        with pytest.raises(chembl.SchemaMismatch, match="activities"):
+            chembl.export_all(db, tmp_path / "out")
+
+    def test_missing_required_column_is_rejected(self, tmp_path):
+        db = self._fixture(
+            tmp_path, "ALTER TABLE compound_structures DROP COLUMN canonical_smiles;"
+        )
+        with pytest.raises(chembl.SchemaMismatch, match="canonical_smiles"):
+            chembl.export_all(db, tmp_path / "out")
+
+    def test_all_problems_are_reported_at_once(self, tmp_path):
+        """Fixing a schema drift one error at a time would mean one multi-hour
+        run per missing column."""
+        # SQLite refuses to drop UNIQUE columns, so this picks two it will.
+        db = self._fixture(
+            tmp_path,
+            "DROP TABLE assays;"
+            "ALTER TABLE component_sequences DROP COLUMN accession;",
+        )
+        with pytest.raises(chembl.SchemaMismatch) as exc:
+            chembl.export_all(db, tmp_path / "out")
+        message = str(exc.value)
+        assert "assays" in message
+        assert "component_sequences.accession" in message
+        # And it should point at the cause rather than just listing symptoms.
+        assert "release" in message.lower()
+
+    def test_healthy_fixture_passes_preflight(self, fixture_db):
+        conn = sqlite3.connect(fixture_db)
+        try:
+            available = chembl.check_schema(conn)
+        finally:
+            conn.close()
+        assert "molecule_dictionary" in available
+        assert "chembl_id" in available["molecule_dictionary"]
+
+    def test_query_is_built_from_available_columns(self, fixture_db):
+        conn = sqlite3.connect(fixture_db)
+        try:
+            sql, dropped = chembl.build_compound_query(chembl.check_schema(conn))
+        finally:
+            conn.close()
+        assert dropped == [], "the fixture has every column, so none should be dropped"
+        assert "md.chembl_id AS chembl_id" in sql

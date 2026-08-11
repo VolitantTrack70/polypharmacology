@@ -33,25 +33,41 @@ BATCH_ROWS = 250_000
 # Queries. Kept as module constants so they can be inspected and tested.
 # ---------------------------------------------------------------------------
 
-Q_COMPOUNDS = """
+# Compound columns as (output_name, sql_expression, required).
+#
+# ChEMBL's schema drifts between releases -- columns are added, moved between
+# tables, and occasionally dropped. Anything marked optional is substituted
+# with NULL when the running database does not have it, so a schema change
+# degrades a single field instead of killing a multi-hour ingest.
+_COMPOUND_COLUMNS: list[tuple[str, str, bool]] = [
+    ("chembl_id",          "md.chembl_id",           True),
+    ("pref_name",          "md.pref_name",           False),
+    ("canonical_smiles",   "cs.canonical_smiles",    True),
+    ("standard_inchi_key", "cs.standard_inchi_key",  True),
+    ("molformula",         "cp.full_molformula",     False),
+    ("mw_freebase",        "cp.mw_freebase",         False),
+    ("alogp",              "cp.alogp",               False),
+    ("hba",                "cp.hba",                 False),
+    ("hbd",                "cp.hbd",                 False),
+    ("psa",                "cp.psa",                 False),
+    ("rtb",                "cp.rtb",                 False),
+    ("aromatic_rings",     "cp.aromatic_rings",      False),
+    ("heavy_atoms",        "cp.heavy_atoms",         False),
+    ("num_ro5_violations", "cp.num_ro5_violations",  False),
+    ("max_phase",          "md.max_phase",           False),
+    ("first_approval",     "md.first_approval",      False),
+    ("withdrawn_flag",     "COALESCE(md.withdrawn_flag, 0)", False),
+]
+
+_ALIAS_TO_TABLE = {
+    "md": "molecule_dictionary",
+    "cs": "compound_structures",
+    "cp": "compound_properties",
+}
+
+Q_COMPOUNDS_TEMPLATE = """
 SELECT
-    md.chembl_id                AS chembl_id,
-    md.pref_name                AS pref_name,
-    cs.canonical_smiles         AS canonical_smiles,
-    cs.standard_inchi_key       AS standard_inchi_key,
-    cp.full_molformula          AS molformula,
-    cp.mw_freebase              AS mw_freebase,
-    cp.alogp                    AS alogp,
-    cp.hba                      AS hba,
-    cp.hbd                      AS hbd,
-    cp.psa                      AS psa,
-    cp.rtb                      AS rtb,
-    cp.aromatic_rings           AS aromatic_rings,
-    cp.heavy_atoms              AS heavy_atoms,
-    cp.num_ro5_violations       AS num_ro5_violations,
-    md.max_phase                AS max_phase,
-    md.first_approval           AS first_approval,
-    COALESCE(md.withdrawn_flag, 0) AS withdrawn_flag
+{columns}
 FROM molecule_dictionary md
 JOIN compound_structures  cs ON cs.molregno = md.molregno
 LEFT JOIN compound_properties cp ON cp.molregno = md.molregno
@@ -178,12 +194,97 @@ SCHEMAS: dict[str, pa.Schema] = {
 }
 
 _QUERIES: dict[str, str] = {
-    "compound": Q_COMPOUNDS,
     "target": Q_TARGETS,
     "target_component": Q_TARGET_COMPONENTS,
     "protein": Q_PROTEINS,
     "activity": Q_ACTIVITIES,
 }
+
+# Load order matters downstream: parents before the tables that reference them.
+ENTITIES: list[str] = ["compound", "target", "protein", "target_component", "activity"]
+
+# Tables the pipeline cannot work without, and the columns it joins on. Checked
+# up front so a schema mismatch surfaces immediately rather than several hours
+# into a run.
+REQUIRED_SCHEMA: dict[str, set[str]] = {
+    "molecule_dictionary": {"molregno", "chembl_id"},
+    "compound_structures": {"molregno", "canonical_smiles", "standard_inchi_key"},
+    "target_dictionary": {"tid", "chembl_id"},
+    "target_components": {"tid", "component_id"},
+    "component_sequences": {"component_id", "accession"},
+    "assays": {"assay_id", "tid", "confidence_score"},
+    "activities": {"activity_id", "assay_id", "molregno", "pchembl_value"},
+}
+
+
+class SchemaMismatch(RuntimeError):
+    """The ChEMBL database does not have the structure the queries expect."""
+
+
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names of `table`, or an empty set if the table is absent."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r[1] for r in rows}
+
+
+def check_schema(conn: sqlite3.Connection) -> dict[str, set[str]]:
+    """Verify the required tables and columns exist.
+
+    Raises SchemaMismatch listing everything missing, rather than failing on
+    the first problem -- if the schema has moved on, you want the whole picture
+    in one go, not a fix-and-retry loop measured in hours.
+
+    Returns the full {table: columns} map, which the query builders use to
+    decide which optional columns are available.
+    """
+    available = {
+        table: table_columns(conn, table)
+        for table in set(REQUIRED_SCHEMA) | set(_ALIAS_TO_TABLE.values()) | {"docs"}
+    }
+
+    problems: list[str] = []
+    for table, needed in REQUIRED_SCHEMA.items():
+        present = available.get(table, set())
+        if not present:
+            problems.append(f"  table {table!r} is missing entirely")
+            continue
+        for column in sorted(needed - present):
+            problems.append(f"  {table}.{column} is missing")
+
+    if problems:
+        raise SchemaMismatch(
+            "This ChEMBL database does not match the expected schema:\n"
+            + "\n".join(problems)
+            + "\n\nChEMBL's schema changes between releases. Check the release "
+            "notes and update sources/chembl.py accordingly."
+        )
+
+    return available
+
+
+def build_compound_query(available: dict[str, set[str]]) -> tuple[str, list[str]]:
+    """Assemble the compound SELECT from whatever columns actually exist.
+
+    Returns (sql, dropped_columns).
+    """
+    selected: list[str] = []
+    dropped: list[str] = []
+
+    for name, expr, required in _COMPOUND_COLUMNS:
+        alias = expr.split(".")[0].split("(")[-1].strip()
+        table = _ALIAS_TO_TABLE.get(alias)
+        column = name if table is None else expr.split(".")[-1].rstrip(", 0)")
+
+        present = table is not None and column in available.get(table, set())
+        if present or table is None:
+            selected.append(f"    {expr} AS {name}")
+        elif required:
+            raise SchemaMismatch(f"required compound column {table}.{column} is missing")
+        else:
+            selected.append(f"    NULL AS {name}")
+            dropped.append(f"{table}.{column}")
+
+    return Q_COMPOUNDS_TEMPLATE.format(columns=",\n".join(selected)), dropped
 
 
 def _coerce(value: object, field: pa.Field) -> object:
@@ -227,8 +328,8 @@ def export_table(
 
     Returns (path, row_count).
     """
-    if entity not in _QUERIES:
-        raise KeyError(f"unknown entity {entity!r}; known: {sorted(_QUERIES)}")
+    if entity not in ENTITIES:
+        raise KeyError(f"unknown entity {entity!r}; known: {ENTITIES}")
 
     schema = SCHEMAS[entity]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -242,9 +343,17 @@ def export_table(
 
     total = 0
     try:
+        available = check_schema(conn)
+        if entity == "compound":
+            sql, dropped = build_compound_query(available)
+            for col in dropped:
+                log.warning("compound.%s not present in this release; exporting NULL", col)
+        else:
+            sql = _QUERIES[entity]
+
         writer = pq.ParquetWriter(out_path, schema, compression="zstd")
         try:
-            for batch in _iter_batches(conn, _QUERIES[entity], schema, limit):
+            for batch in _iter_batches(conn, sql, schema, limit):
                 writer.write_batch(batch)
                 total += batch.num_rows
                 log.info("%s: %d rows", entity, total)
@@ -274,8 +383,16 @@ def export_all(
             f"Run `chemmed-ingest download --source chembl` first."
         )
 
+    # Preflight once, before any work, so a schema mismatch is reported in
+    # seconds rather than after the first table has already been written.
+    conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+    try:
+        check_schema(conn)
+    finally:
+        conn.close()
+
     counts: dict[str, int] = {}
-    for entity in ("compound", "target", "protein", "target_component", "activity"):
+    for entity in ENTITIES:
         _, n = export_table(sqlite_path, entity, out_dir, limit=limit)
         counts[entity] = n
     return counts
