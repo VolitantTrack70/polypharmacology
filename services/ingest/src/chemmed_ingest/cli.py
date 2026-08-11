@@ -133,7 +133,7 @@ def fingerprint(
     import pyarrow.parquet as pq
     from tqdm import tqdm
 
-    from chemmed_ingest.chem.fingerprint import smiles_to_record
+    from chemmed_ingest.chem.fingerprint import smiles_to_record_pair
 
     src = PATHS.processed / "compound.parquet"
     if not src.exists():
@@ -142,10 +142,12 @@ def fingerprint(
     df = pl.read_parquet(src, columns=["chembl_id", "canonical_smiles"])
     if limit:
         df = df.head(limit)
-    pairs = list(zip(df["chembl_id"].to_list(), df["canonical_smiles"].to_list(), strict=True))
+    total = df.height
+    # iter_rows is a generator, so the 2.4M input tuples are never all resident.
+    pairs = df.iter_rows()
 
     n_workers = workers or max(1, (mp.cpu_count() or 2) - 1)
-    console.print(f"fingerprinting {len(pairs):,} structures across {n_workers} workers")
+    console.print(f"fingerprinting {total:,} structures across {n_workers} workers")
 
     schema = pa.schema([
         ("chembl_id", pa.string()),
@@ -160,9 +162,13 @@ def fingerprint(
     written = 0
     buffer: list[dict] = []
 
+    # imap, not starmap. starmap blocks until every worker is done and returns
+    # one list holding all 2.4M results (~1GB on top of the inputs), and the
+    # progress bar would then iterate an already-complete list -- jumping
+    # straight to 100% after a silent hour. imap streams results as they land.
     with mp.Pool(n_workers) as pool, pq.ParquetWriter(out, schema, compression="zstd") as writer:
-        results = pool.starmap(smiles_to_record, pairs, chunksize=2000)
-        for rec in tqdm(results, total=len(pairs), desc="fingerprint"):
+        results = pool.imap(smiles_to_record_pair, pairs, chunksize=1000)
+        for rec in tqdm(results, total=total, desc="fingerprint", unit="mol"):
             if rec is None:
                 failures += 1
                 continue

@@ -118,6 +118,17 @@ def popcount(raw: bytes) -> int:
     return int(np.unpackbits(np.frombuffer(raw, dtype=np.uint8)).sum())
 
 
+def smiles_to_record_pair(pair: tuple[str, str]) -> dict[str, object] | None:
+    """Tuple-taking wrapper so the work can go through `Pool.imap`.
+
+    `Pool.starmap` unpacks arguments but is blocking and materialises every
+    result before returning -- unusable at 2.4M rows. `imap` streams, but only
+    passes a single argument, hence this shim. It must live at module level to
+    be picklable.
+    """
+    return smiles_to_record(pair[0], pair[1])
+
+
 def smiles_to_record(chembl_id: str, smiles: str) -> dict[str, object] | None:
     """Full per-compound pipeline used by the parallel fingerprint workers.
 
