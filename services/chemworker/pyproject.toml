@@ -40,5 +40,9 @@ target-version = "py311"
 # Generated protobuf stubs are not ours to lint.
 extend-exclude = ["*_pb2.py", "*_pb2_grpc.py", "*_pb2.pyi"]
 
+# Kept identical to services/ingest so the two Python packages do not drift.
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

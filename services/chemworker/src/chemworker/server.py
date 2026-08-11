@@ -5,9 +5,12 @@ the only process that touches RDKit at request time.
 
 Generate the protobuf stubs before first run:
 
-    python -m grpc_tools.protoc -I proto \
-        --python_out=src/chemworker --grpc_python_out=src/chemworker \
-        proto/chemworker.proto
+    python gen_proto.py
+
+Use that script rather than calling protoc directly -- grpcio emits a flat
+`import chemworker_pb2` which cannot resolve inside a package, and the script
+rewrites it. `scripts/dev-chemworker.cmd` runs it automatically if the stubs
+are missing.
 """
 
 from __future__ import annotations
@@ -21,8 +24,6 @@ from pathlib import Path
 
 import grpc
 import psycopg
-from grpc_health.v1 import health, health_pb2, health_pb2_grpc
-
 from chemmed_ingest.chem.fingerprint import (
     StandardizationError,
     fingerprint_bytes,
@@ -30,6 +31,7 @@ from chemmed_ingest.chem.fingerprint import (
 )
 from chemmed_ingest.chem.similarity import FingerprintIndex
 from chemmed_ingest.config import DATABASE_URL, FP, PATHS
+from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 
 from chemworker import chemworker_pb2 as pb
 from chemworker import chemworker_pb2_grpc as pb_grpc
