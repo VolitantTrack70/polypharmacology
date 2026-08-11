@@ -31,7 +31,9 @@ pub enum ComponentStatus {
 /// "the graph is empty" and "the worker is down" look identical in the UI
 /// otherwise.
 pub async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusResponse>> {
-    let database = match sqlx::query_scalar::<_, i64>("SELECT 1")
+    // `SELECT 1` is INT4 in Postgres, not INT8 -- decoding it as i64 fails at
+    // runtime and made a perfectly healthy database report itself as down.
+    let database = match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.db)
         .await
     {

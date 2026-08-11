@@ -39,19 +39,25 @@ pub async fn resolve(
         return Err(ApiError::InvalidStructure(std.error));
     }
 
-    let hit: Option<(String,)> = sqlx::query_as(
-        "SELECT chembl_id FROM chem.compound WHERE standard_inchi_key = $1 LIMIT 1",
+    let hit: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT chembl_id, pref_name FROM chem.compound \
+         WHERE standard_inchi_key = $1 LIMIT 1",
     )
     .bind(&std.inchikey)
     .fetch_optional(&state.db)
     .await?;
 
+    let (chembl_id, known_name) = match hit {
+        Some((id, name)) => (Some(id), name),
+        None => (None, None),
+    };
+
     Ok(Json(ResolveResponse {
         canonical_smiles: std.canonical_smiles,
         inchikey: std.inchikey,
         parent_inchikey: std.parent_inchikey,
-        chembl_id: hit.map(|h| h.0),
-        known_name: None,
+        chembl_id,
+        known_name,
     }))
 }
 

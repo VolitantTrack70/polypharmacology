@@ -137,10 +137,22 @@ def load_table(
                 collist += ", release_id"
                 select_cols += f", {int(release_id)}"
 
+        # Upsert rather than DO NOTHING. Re-ingesting a newer ChEMBL release
+        # must actually refresh existing rows -- with DO NOTHING, a corrected
+        # structure or a new clinical phase would be silently ignored forever.
+        # Pure join tables have no non-key columns, so they fall back to
+        # DO NOTHING (an empty SET clause is a syntax error).
+        updatable = [c for c in columns if c not in spec["pk"]]
+        if updatable:
+            assignments = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in updatable)
+            action = f"DO UPDATE SET {assignments}"
+        else:
+            action = "DO NOTHING"
+
         cur.execute(
             f"INSERT INTO chem.{table} ({collist}) "
             f"SELECT {select_cols} FROM {staging} s {where_clause} "
-            f"ON CONFLICT ({conflict}) DO NOTHING"
+            f"ON CONFLICT ({conflict}) {action}"
         )
         inserted = cur.rowcount
         cur.execute(f"DROP TABLE IF EXISTS {staging}")
@@ -187,13 +199,41 @@ def record_release(
 def refresh_derived(conn: psycopg.Connection) -> None:
     """Rebuild the materialised views after a load.
 
+    ORDER MATTERS and is not alphabetical:
+
+      1. `pathway_domain` walks the Reactome hierarchy upward to find each
+         pathway's top-level ancestor.
+      2. That result is denormalised onto `pathway.biological_domain`. This
+         UPDATE also lives in migration 003, but a migration runs once against
+         a table that is usually still empty -- so it has to happen here too,
+         after every load, or the column stays NULL forever.
+      3. `target_pathway` reads `pathway.biological_domain`, so it must refresh
+         only after step 2.
+
     CONCURRENTLY is deliberately not used: it requires the view to be already
     populated and is far slower on a first build.
     """
     with conn.cursor() as cur:
-        for view in ("binds_to", "target_pathway", "pathway_domain"):
-            log.info("refreshing chem.%s", view)
-            cur.execute(f"REFRESH MATERIALIZED VIEW chem.{view}")
+        log.info("refreshing chem.binds_to")
+        cur.execute("REFRESH MATERIALIZED VIEW chem.binds_to")
+
+        log.info("refreshing chem.pathway_domain")
+        cur.execute("REFRESH MATERIALIZED VIEW chem.pathway_domain")
+
+        log.info("denormalising biological_domain onto chem.pathway")
+        cur.execute(
+            """
+            UPDATE chem.pathway p
+            SET biological_domain = d.biological_domain
+            FROM chem.pathway_domain d
+            WHERE d.reactome_id = p.reactome_id
+              AND p.biological_domain IS DISTINCT FROM d.biological_domain
+            """
+        )
+        log.info("  %d pathways updated", cur.rowcount)
+
+        log.info("refreshing chem.target_pathway")
+        cur.execute("REFRESH MATERIALIZED VIEW chem.target_pathway")
     conn.commit()
 
 

@@ -36,6 +36,7 @@ BATCH_ROWS = 250_000
 Q_COMPOUNDS = """
 SELECT
     md.chembl_id                AS chembl_id,
+    md.pref_name                AS pref_name,
     cs.canonical_smiles         AS canonical_smiles,
     cs.standard_inchi_key       AS standard_inchi_key,
     cp.full_molformula          AS molformula,
@@ -123,6 +124,7 @@ WHERE act.pchembl_value IS NOT NULL
 SCHEMAS: dict[str, pa.Schema] = {
     "compound": pa.schema([
         ("chembl_id", pa.string()),
+        ("pref_name", pa.string()),
         ("canonical_smiles", pa.string()),
         ("standard_inchi_key", pa.string()),
         ("molformula", pa.string()),

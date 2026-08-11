@@ -99,17 +99,26 @@ CREATE TABLE activities (
 );
 """
 
-# (molregno, chembl_id, name, smiles, max_phase, first_approval)
+# (molregno, chembl_id, name, smiles, max_phase, first_approval, inchikey)
+#
+# The InChIKeys are the REAL ones, computed with RDKit from these SMILES.
+# They matter: /api/resolve matches a user's structure to ChEMBL on InChIKey,
+# so a placeholder here would make that endpoint silently return no match.
 COMPOUNDS = [
     (1, "CHEMBL941", "IMATINIB",
-     "Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1", 4.0, 2001),
+     "Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1", 4.0, 2001,
+     "KTUFNOKKBVMGRW-UHFFFAOYSA-N"),
     (2, "CHEMBL255863", "NILOTINIB",
-     "Cc1cn(-c2cc(NC(=O)c3ccc(C)c(Nc4nccc(-c5cccnc5)n4)c3)cc(C(F)(F)F)c2)cn1", 4.0, 2007),
-    (3, "CHEMBL25", "ASPIRIN", "CC(=O)Oc1ccccc1C(=O)O", 4.0, 1950),
-    (4, "CHEMBL521", "IBUPROFEN", "CC(C)Cc1ccc(C(C)C(=O)O)cc1", 4.0, 1974),
-    (5, "CHEMBL112", "PARACETAMOL", "CC(=O)Nc1ccc(O)cc1", 4.0, 1950),
+     "Cc1cn(-c2cc(NC(=O)c3ccc(C)c(Nc4nccc(-c5cccnc5)n4)c3)cc(C(F)(F)F)c2)cn1", 4.0, 2007,
+     "HHZIURLSWUIHRB-UHFFFAOYSA-N"),
+    (3, "CHEMBL25", "ASPIRIN", "CC(=O)Oc1ccccc1C(=O)O", 4.0, 1950,
+     "BSYNRYMUTXBXSQ-UHFFFAOYSA-N"),
+    (4, "CHEMBL521", "IBUPROFEN", "CC(C)Cc1ccc(C(C)C(=O)O)cc1", 4.0, 1974,
+     "HEFNNWSXXWATRW-UHFFFAOYSA-N"),
+    (5, "CHEMBL112", "PARACETAMOL", "CC(=O)Nc1ccc(O)cc1", 4.0, 1950,
+     "RZVAJINKPMORJF-UHFFFAOYSA-N"),
     # No structure row -- must be excluded by the parser's INNER JOIN.
-    (6, "CHEMBL9999", "STRUCTURELESS", None, None, None),
+    (6, "CHEMBL9999", "STRUCTURELESS", None, None, None, None),
 ]
 
 # (molregno, formula, mw, alogp, hba, hbd, psa, rtb, arom, heavy, ro5)
@@ -204,11 +213,7 @@ def build_fixture(path: Path) -> Path:
         conn.executemany(
             "INSERT INTO compound_structures "
             "(molregno, canonical_smiles, standard_inchi_key) VALUES (?,?,?)",
-            [
-                (m[0], m[3], f"FAKEKEY{m[0]:022d}"[:27])
-                for m in COMPOUNDS
-                if m[3] is not None
-            ],
+            [(m[0], m[3], m[6]) for m in COMPOUNDS if m[3] is not None],
         )
         conn.executemany(
             "INSERT INTO compound_properties (molregno, full_molformula, mw_freebase, alogp, "
