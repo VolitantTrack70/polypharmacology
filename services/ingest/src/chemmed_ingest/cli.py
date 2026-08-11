@@ -512,14 +512,23 @@ def run_all(
     limit: int | None = typer.Option(None, help="Row cap per table. Use for a fast smoke run."),
     skip_download: bool = typer.Option(False),
 ) -> None:
-    """Run the full pipeline end to end."""
+    """Run the full pipeline end to end.
+
+    EVERY argument to each stage is passed explicitly. A Typer command invoked
+    as a plain Python function does not get its declared defaults -- it gets
+    `typer.models.OptionInfo` objects, which then fail deep inside the stage.
+    Omitting `source` here made `index()` blow up with
+    "unknown source <OptionInfo object at 0x...>" after the load had already
+    finished. Adding a new Option to any stage below silently reintroduces
+    that, which is what `test_run_all_passes_real_values` guards.
+    """
     if not skip_download:
-        download(source="all", release=release)
+        download(source="all", release=release, verify=True)
     parse(release=release, limit=limit, species="Homo sapiens")
     fingerprint(workers=0, limit=limit)
     migrate()
     load_cmd(release=release)
-    index()
+    index(source="parquet")
     console.print("\n[bold green]pipeline complete[/bold green]")
     console.print(f"config: {FP.signature}, default cutoff {THRESHOLDS.tanimoto}")
 
