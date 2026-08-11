@@ -43,3 +43,4 @@ services/web/build/
 # --- Editors ---
 .vscode/
 .idea/
+.claude/
