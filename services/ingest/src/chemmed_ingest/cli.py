@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import tarfile
+from datetime import UTC
 from pathlib import Path
 
 import typer
@@ -269,12 +270,12 @@ def load_cmd(release: str = typer.Option("35")) -> None:
 def _reactome_version() -> str:
     """Reactome publishes only a rolling 'current' download with no version in
     the URL, so the file's modification date is the honest identifier."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     marker = PATHS.raw / "ReactomePathways.txt"
     if not marker.exists():
         return "unknown"
-    stamp = datetime.fromtimestamp(marker.stat().st_mtime, tz=timezone.utc)
+    stamp = datetime.fromtimestamp(marker.stat().st_mtime, tz=UTC)
     return f"downloaded-{stamp:%Y-%m-%d}"
 
 
