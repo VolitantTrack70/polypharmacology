@@ -1,0 +1,91 @@
+"""Central configuration, loaded from environment / .env.
+
+Fingerprint parameters live here rather than being passed around, because a
+mismatch between the radius/n_bits used at index-build time and at query time
+produces silently wrong similarity scores rather than an error.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Walk up to the repo root (.../chem-med) and load .env if present.
+REPO_ROOT = Path(__file__).resolve().parents[4]
+load_dotenv(REPO_ROOT / ".env")
+
+
+def _env(key: str, default: str) -> str:
+    return os.environ.get(key, default)
+
+
+@dataclass(frozen=True)
+class FingerprintConfig:
+    """Morgan (ECFP-like) fingerprint parameters.
+
+    radius=2 / n_bits=2048 corresponds to ECFP4 and is the field default.
+    Changing either invalidates every stored fingerprint and the FPSim2 index.
+    """
+
+    radius: int = int(_env("FP_RADIUS", "2"))
+    n_bits: int = int(_env("FP_NBITS", "2048"))
+
+    @property
+    def n_bytes(self) -> int:
+        return self.n_bits // 8
+
+    @property
+    def signature(self) -> str:
+        """Stamped into index files so a mismatched index fails loudly."""
+        return f"morgan-r{self.radius}-{self.n_bits}"
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """Default cutoffs.
+
+    tanimoto=0.40 is deliberate and is NOT the 0.85 that intuition suggests.
+    Morgan/ECFP4 Tanimoto is a far harsher metric than path- or MACCS-based
+    fingerprints: 0.85 means near-identical molecules (a methyl group apart)
+    and returns essentially nothing. The range over which compounds
+    meaningfully share targets is roughly 0.35-0.55.
+    See docs/decisions/0002-similarity-thresholds.md.
+    """
+
+    tanimoto: float = float(_env("DEFAULT_TANIMOTO_CUTOFF", "0.40"))
+    pchembl: float = float(_env("DEFAULT_PCHEMBL_CUTOFF", "6.0"))
+    # ChEMBL assay-to-target confidence; >=7 means the assay is confidently
+    # attributed to a single protein target.
+    min_confidence: int = int(_env("MIN_CONFIDENCE_SCORE", "7"))
+
+
+@dataclass(frozen=True)
+class Paths:
+    raw: Path = Path(_env("DATA_RAW_DIR", str(REPO_ROOT / "data" / "raw")))
+    processed: Path = Path(_env("DATA_PROCESSED_DIR", str(REPO_ROOT / "data" / "processed")))
+    fpsim_index: Path = Path(
+        _env("FPSIM2_INDEX_PATH", str(REPO_ROOT / "data" / "processed" / "chembl_morgan_2048.h5"))
+    )
+
+    def ensure(self) -> None:
+        self.raw.mkdir(parents=True, exist_ok=True)
+        self.processed.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass(frozen=True)
+class KafkaConfig:
+    bootstrap_servers: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    topic_compounds: str = _env("KAFKA_TOPIC_COMPOUNDS", "chemmed.compounds.raw")
+    topic_fingerprints: str = _env("KAFKA_TOPIC_FINGERPRINTS", "chemmed.compounds.fingerprinted")
+    group_id: str = _env("KAFKA_INGEST_GROUP", "chemmed-fingerprint-workers")
+
+
+DATABASE_URL = _env("DATABASE_URL", "postgres://chemmed:change_me_locally@localhost:5432/chemmed")
+
+FP = FingerprintConfig()
+THRESHOLDS = Thresholds()
+PATHS = Paths()
+KAFKA = KafkaConfig()

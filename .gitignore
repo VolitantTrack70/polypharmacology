@@ -1,0 +1,43 @@
+# --- Data (never commit; multi-GB source dumps) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.db
+*.db-journal
+*.sdf
+*.sdf.gz
+*.fps
+*.h5
+*.parquet
+*.npy
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*_pb2.py
+*_pb2_grpc.py
+*_pb2.pyi
+
+# --- Rust ---
+services/api/target/
+**/*.rs.bk
+
+# --- Node / SvelteKit ---
+node_modules/
+.svelte-kit/
+services/web/build/
+.DS_Store
+
+# --- Editors ---
+.vscode/
+.idea/

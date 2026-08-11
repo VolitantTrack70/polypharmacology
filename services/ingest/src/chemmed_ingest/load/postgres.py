@@ -1,0 +1,198 @@
+"""Bulk load Parquet into Postgres via COPY.
+
+Everything routes through an UNLOGGED staging table before landing in the real
+one. That costs an extra pass but buys three things worth more than the pass:
+
+  * Dangling foreign keys are filtered instead of aborting the load. A
+    `--limit`ed smoke run produces activities referencing compounds outside the
+    truncated set; failing on that would make small runs impossible.
+  * Re-running a stage is idempotent (`ON CONFLICT DO NOTHING`).
+  * A malformed row kills the staging load, not a half-populated real table.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import psycopg
+import pyarrow.parquet as pq
+
+log = logging.getLogger(__name__)
+
+COPY_BATCH = 50_000
+
+# table -> (conflict target, referential guards applied when moving staging->real)
+#   guard = (column_in_staging, referenced_table, referenced_column)
+_LOAD_SPEC: dict[str, dict[str, Any]] = {
+    "compound": {"pk": ["chembl_id"], "guards": []},
+    "target": {"pk": ["target_chembl_id"], "guards": []},
+    "protein": {"pk": ["uniprot_accession"], "guards": []},
+    "target_component": {
+        "pk": ["target_chembl_id", "uniprot_accession"],
+        "guards": [("target_chembl_id", "target", "target_chembl_id")],
+    },
+    "activity": {
+        "pk": ["activity_id"],
+        "guards": [
+            ("chembl_id", "compound", "chembl_id"),
+            ("target_chembl_id", "target", "target_chembl_id"),
+        ],
+    },
+    "pathway": {"pk": ["reactome_id"], "guards": []},
+    "pathway_hierarchy": {
+        "pk": ["parent_reactome_id", "child_reactome_id"],
+        "guards": [
+            ("parent_reactome_id", "pathway", "reactome_id"),
+            ("child_reactome_id", "pathway", "reactome_id"),
+        ],
+    },
+    "protein_pathway": {
+        "pk": ["uniprot_accession", "reactome_id"],
+        "guards": [("reactome_id", "pathway", "reactome_id")],
+    },
+}
+
+
+def _iter_rows(path: Path) -> Iterator[tuple[list[str], list[tuple]]]:
+    """Stream a Parquet file as (column_names, row_batch)."""
+    parquet = pq.ParquetFile(path)
+    columns = [f.name for f in parquet.schema_arrow]
+    for batch in parquet.iter_batches(batch_size=COPY_BATCH):
+        table = batch.to_pydict()
+        rows = list(zip(*(table[c] for c in columns), strict=True))
+        yield columns, rows
+
+
+def load_table(
+    conn: psycopg.Connection,
+    table: str,
+    parquet_path: Path,
+    release_id: int | None = None,
+) -> int:
+    """COPY one Parquet file into `chem.<table>`. Returns rows actually inserted."""
+    if table not in _LOAD_SPEC:
+        raise KeyError(f"no load spec for {table!r}")
+    if not parquet_path.exists():
+        log.warning("skipping %s: %s not found", table, parquet_path)
+        return 0
+
+    spec = _LOAD_SPEC[table]
+    staging = f"_stage_{table}"
+
+    with conn.cursor() as cur:
+        cur.execute(f"DROP TABLE IF EXISTS {staging}")
+        # LIKE ... copies column types but not constraints -- exactly what we
+        # want, since filtering the constraint violations is the whole point.
+        cur.execute(f"CREATE UNLOGGED TABLE {staging} (LIKE chem.{table})")
+
+        copied = 0
+        first = True
+        columns: list[str] = []
+        for cols, rows in _iter_rows(parquet_path):
+            if first:
+                columns = cols
+                first = False
+            collist = ", ".join(f'"{c}"' for c in columns)
+            with cur.copy(f"COPY {staging} ({collist}) FROM STDIN") as copy:
+                for row in rows:
+                    copy.write_row(row)
+            copied += len(rows)
+            log.info("%s: staged %d rows", table, copied)
+
+        if copied == 0:
+            cur.execute(f"DROP TABLE IF EXISTS {staging}")
+            return 0
+
+        # Move staging -> real, dropping rows that would violate an FK.
+        where = " AND ".join(
+            f"EXISTS (SELECT 1 FROM chem.{ref_t} r WHERE r.{ref_c} = s.{col})"
+            for col, ref_t, ref_c in spec["guards"]
+        )
+        where_clause = f"WHERE {where}" if where else ""
+
+        collist = ", ".join(f'"{c}"' for c in columns)
+        select_cols = ", ".join(f"s.{c}" for c in columns)
+        conflict = ", ".join(spec["pk"])
+
+        if release_id is not None and "release_id" not in columns:
+            collist += ", release_id"
+            select_cols += f", {int(release_id)}"
+
+        cur.execute(
+            f"INSERT INTO chem.{table} ({collist}) "
+            f"SELECT {select_cols} FROM {staging} s {where_clause} "
+            f"ON CONFLICT ({conflict}) DO NOTHING"
+        )
+        inserted = cur.rowcount
+        cur.execute(f"DROP TABLE IF EXISTS {staging}")
+
+    conn.commit()
+    dropped = copied - inserted
+    if dropped:
+        log.info("%s: inserted %d, skipped %d (dangling FK or duplicate)",
+                 table, inserted, dropped)
+    else:
+        log.info("%s: inserted %d", table, inserted)
+    return inserted
+
+
+def record_release(
+    conn: psycopg.Connection,
+    source: str,
+    version: str,
+    source_url: str | None = None,
+    row_counts: dict[str, int] | None = None,
+) -> int:
+    """Upsert a provenance row and return its release_id."""
+    import json
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO chem.data_release (source, version, source_url, row_counts)
+            VALUES (%s, %s, %s, %s::jsonb)
+            ON CONFLICT (source, version) DO UPDATE
+              SET loaded_at = now(),
+                  row_counts = EXCLUDED.row_counts,
+                  source_url = COALESCE(EXCLUDED.source_url, chem.data_release.source_url)
+            RETURNING release_id
+            """,
+            (source, version, source_url, json.dumps(row_counts or {})),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    assert row is not None
+    return int(row[0])
+
+
+def refresh_derived(conn: psycopg.Connection) -> None:
+    """Rebuild the materialised views after a load.
+
+    CONCURRENTLY is deliberately not used: it requires the view to be already
+    populated and is far slower on a first build.
+    """
+    with conn.cursor() as cur:
+        for view in ("binds_to", "target_pathway", "pathway_domain"):
+            log.info("refreshing chem.%s", view)
+            cur.execute(f"REFRESH MATERIALIZED VIEW chem.{view}")
+    conn.commit()
+
+
+def apply_migrations(conn: psycopg.Connection, migrations_dir: Path) -> list[str]:
+    """Run every .sql in `db/migrations` in filename order.
+
+    Migrations are written to be idempotent, so re-running is safe. AGE's
+    `LOAD 'age'` is session-scoped, hence one statement block per file.
+    """
+    applied = []
+    for path in sorted(migrations_dir.glob("*.sql")):
+        log.info("applying %s", path.name)
+        sql = path.read_text(encoding="utf-8")
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+        applied.append(path.name)
+    return applied

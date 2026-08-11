@@ -1,0 +1,38 @@
+[package]
+name = "chemmed-api"
+version = "0.1.0"
+edition = "2021"
+description = "HTTP API and query orchestration for the polypharmacology knowledge graph"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+
+# Postgres. `sqlx` in runtime-query mode (not the compile-time `query!` macros),
+# so `cargo build` does not require a live database.
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio", "tls-rustls", "postgres", "macros", "chrono",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# gRPC client for the Python chemworker.
+tonic = "0.12"
+prost = "0.13"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+anyhow = "1"
+thiserror = "2"
+dotenvy = "0.15"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

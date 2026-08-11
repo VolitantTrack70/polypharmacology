@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package chemmed.chemworker.v1;
+
+// Cheminformatics service. Owns RDKit and the in-memory fingerprint index.
+//
+// This boundary exists because RDKit has no mature Rust equivalent, so all
+// structure handling lives in Python. The Rust API never parses a SMILES --
+// it delegates here and orchestrates the result against Postgres.
+service ChemWorker {
+  // Parse, desalt, neutralise, canonicalise. Cheap; no index access.
+  rpc Standardize(StandardizeRequest) returns (StandardizeResponse);
+
+  // Tanimoto search over the full compound set. This is the expensive call.
+  rpc SimilaritySearch(SimilaritySearchRequest) returns (SimilaritySearchResponse);
+
+  // Index metadata + liveness.
+  rpc Status(StatusRequest) returns (StatusResponse);
+}
+
+message StandardizeRequest {
+  string smiles = 1;
+}
+
+message StandardizeResponse {
+  bool   ok               = 1;
+  string canonical_smiles = 2;
+  string inchikey         = 3;
+  // First InChIKey block -- skeleton hash ignoring stereo/protonation.
+  string parent_inchikey  = 4;
+  // Populated when ok == false. Never both.
+  string error            = 5;
+}
+
+message SimilaritySearchRequest {
+  // Exactly one of these. smiles is standardised server-side before search.
+  oneof query {
+    string smiles    = 1;
+    string chembl_id = 2;
+  }
+  // Morgan/ECFP4 Tanimoto. See docs/decisions/0002 -- 0.40 is the sane default,
+  // NOT 0.85. Values above ~0.6 return almost nothing.
+  float  threshold = 3;
+  // Caps the response, not the scan. Results are always the globally best hits.
+  uint32 limit     = 4;
+}
+
+message SimilarityHit {
+  string chembl_id = 1;
+  float  tanimoto  = 2;
+}
+
+message SimilaritySearchResponse {
+  repeated SimilarityHit hits = 1;
+  // Echoed back so the caller can report what was actually searched.
+  string canonical_smiles     = 2;
+  uint32 searched             = 3;
+  // Candidates surviving the popcount bound. searched - considered is what the
+  // prune saved.
+  uint32 considered           = 4;
+  float  elapsed_ms           = 5;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  bool   index_loaded   = 1;
+  uint64 compound_count = 2;
+  // e.g. "morgan-r2-2048". A mismatch against the ingest config means the
+  // index is stale and scores would be silently wrong.
+  string fp_signature   = 3;
+  string version        = 4;
+}
