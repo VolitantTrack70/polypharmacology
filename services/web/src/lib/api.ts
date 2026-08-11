@@ -5,7 +5,23 @@
  * change both -- there is no codegen across this boundary yet.
  */
 
+import { demoOffTargets, demoResolve } from './demo';
+
 const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080/api';
+
+/**
+ * When the real API is unreachable, fall back to demo fixtures so the UI is
+ * always workable — and always say so loudly.
+ *
+ * This exists because the backend needs Docker + Postgres + Rust + protoc to
+ * come up, and the interface should not be blocked on any of that. `dataSource`
+ * drives a persistent banner; results that look real but aren't are worse than
+ * no results at all.
+ */
+export type DataSource = 'live' | 'demo' | 'unknown';
+
+let dataSource: DataSource = 'unknown';
+export const getDataSource = () => dataSource;
 
 export type NodeKind = 'query' | 'compound' | 'target' | 'pathway';
 export type EdgeKind = 'similar_to' | 'binds_to' | 'participates_in';
@@ -96,18 +112,48 @@ export interface OffTargetParams {
 	organism?: string;
 }
 
+/**
+ * Try the real API; fall back to fixtures if it isn't running.
+ *
+ * Only *connectivity* failures fall back. A 4xx from a live API is a genuine
+ * result about the query (bad SMILES, no match) and must surface as an error —
+ * silently swapping in demo data there would hide real bugs.
+ */
+async function withDemoFallback<T>(live: () => Promise<T>, demo: () => T): Promise<T> {
+	try {
+		const result = await live();
+		dataSource = 'live';
+		return result;
+	} catch (e) {
+		if (e instanceof ApiError && e.code === 'network') {
+			dataSource = 'demo';
+			return demo();
+		}
+		dataSource = 'live';
+		throw e;
+	}
+}
+
 export const api = {
 	resolve: (smiles: string) =>
-		request<ResolveResponse>('/resolve', {
-			method: 'POST',
-			body: JSON.stringify({ smiles })
-		}),
+		withDemoFallback(
+			() =>
+				request<ResolveResponse>('/resolve', {
+					method: 'POST',
+					body: JSON.stringify({ smiles })
+				}),
+			() => demoResolve(smiles)
+		),
 
 	offTargets: (params: OffTargetParams) =>
-		request<OffTargetResponse>('/offtargets', {
-			method: 'POST',
-			body: JSON.stringify(params)
-		}),
+		withDemoFallback(
+			() =>
+				request<OffTargetResponse>('/offtargets', {
+					method: 'POST',
+					body: JSON.stringify(params)
+				}),
+			() => demoOffTargets(params)
+		),
 
 	status: () => request<Record<string, unknown>>('/status')
 };

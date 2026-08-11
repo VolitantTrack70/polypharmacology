@@ -72,6 +72,29 @@ documented in full:
 
 ## Getting started
 
+### The UI runs on its own
+
+The interface does **not** require the database, the API, or the ingestion
+pipeline. If the API isn't reachable it falls back to demo fixtures and shows a
+persistent banner saying so, which means the frontend can be developed and
+demonstrated on any machine with Node installed:
+
+```bash
+scripts\dev-web.cmd
+```
+
+Then open <http://localhost:5173>.
+
+This decoupling is deliberate. A UI that can only render once four backing
+services are healthy is a UI you cannot iterate on — and cannot demo.
+
+> The demo fixtures use real target biology (imatinib's documented kinase
+> profile, genuine UniProt accessions, real Reactome pathway names) but the
+> similarity and affinity **numbers are illustrative, not measurements**. The
+> banner is not decorative — do not remove it while the fallback exists.
+
+### Full stack
+
 **Prerequisites:** Docker, Rust toolchain, Node 20+, Python 3.12 (via `uv`).
 
 ```bash

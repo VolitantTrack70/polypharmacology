@@ -36,6 +36,8 @@ services/api/target/
 node_modules/
 .svelte-kit/
 services/web/build/
+# Vite writes a dep-optimisation cache next to the cwd it was launched from.
+.vite/
 .DS_Store
 
 # --- Editors ---

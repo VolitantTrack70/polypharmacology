@@ -63,8 +63,9 @@
 					selector: 'node:selected',
 					style: { 'border-width': 3, 'border-color': '#212529' }
 				}
-			],
-			wheelSensitivity: 0.2
+			]
+			// wheelSensitivity is deliberately left at the default -- overriding it
+			// makes zoom behave unpredictably across mice and cytoscape warns.
 		});
 
 		cy.on('tap', 'node', (evt: any) => {
