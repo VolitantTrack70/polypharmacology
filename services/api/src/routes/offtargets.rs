@@ -514,7 +514,14 @@ mod tests {
         let g = build_graph(&rows, &sim(&[]));
 
         assert_eq!(ids_of(&g, "compound"), vec!["C_UNKNOWN"]);
-        assert_eq!(g.nodes.iter().find(|n| n.id == "C_UNKNOWN").unwrap().tanimoto, None);
+        assert_eq!(
+            g.nodes
+                .iter()
+                .find(|n| n.id == "C_UNKNOWN")
+                .unwrap()
+                .tanimoto,
+            None
+        );
     }
 
     #[test]
@@ -540,8 +547,16 @@ mod tests {
 
         let ids: HashSet<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         for e in &g.edges {
-            assert!(ids.contains(e.source.as_str()), "dangling source {}", e.source);
-            assert!(ids.contains(e.target.as_str()), "dangling target {}", e.target);
+            assert!(
+                ids.contains(e.source.as_str()),
+                "dangling source {}",
+                e.source
+            );
+            assert!(
+                ids.contains(e.target.as_str()),
+                "dangling target {}",
+                e.target
+            );
         }
     }
 

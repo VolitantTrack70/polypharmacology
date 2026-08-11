@@ -1,5 +1,7 @@
 # Polypharmacology & Off-Target Binding Knowledge Graph
 
+[![CI](https://github.com/VolitantTrack70/polypharmacology/actions/workflows/ci.yml/badge.svg)](https://github.com/VolitantTrack70/polypharmacology/actions/workflows/ci.yml)
+
 A research tool for generating off-target hypotheses. Given a compound, it finds
 structurally similar molecules, collects the proteins those molecules are known
 to bind, and maps those proteins onto biological pathways — surfacing the

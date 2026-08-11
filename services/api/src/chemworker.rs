@@ -37,7 +37,9 @@ impl ChemWorker {
     pub async fn standardize(&self, smiles: &str) -> Result<StandardizeResponse, tonic::Status> {
         let mut client = self.client.clone();
         let resp = client
-            .standardize(StandardizeRequest { smiles: smiles.to_string() })
+            .standardize(StandardizeRequest {
+                smiles: smiles.to_string(),
+            })
             .await?;
         Ok(resp.into_inner())
     }
@@ -48,7 +50,8 @@ impl ChemWorker {
         threshold: f32,
         limit: u32,
     ) -> Result<SimilaritySearchResponse, tonic::Status> {
-        self.search(Query::Smiles(smiles.to_string()), threshold, limit).await
+        self.search(Query::Smiles(smiles.to_string()), threshold, limit)
+            .await
     }
 
     pub async fn search_by_chembl_id(
@@ -57,7 +60,8 @@ impl ChemWorker {
         threshold: f32,
         limit: u32,
     ) -> Result<SimilaritySearchResponse, tonic::Status> {
-        self.search(Query::ChemblId(chembl_id.to_string()), threshold, limit).await
+        self.search(Query::ChemblId(chembl_id.to_string()), threshold, limit)
+            .await
     }
 
     async fn search(

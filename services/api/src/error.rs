@@ -34,9 +34,11 @@ impl IntoResponse for ApiError {
         let (status, code, message) = match &self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m.clone()),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m.clone()),
-            ApiError::InvalidStructure(m) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_structure", m.clone())
-            }
+            ApiError::InvalidStructure(m) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_structure",
+                m.clone(),
+            ),
             // Not every gRPC failure is an outage. The worker aborts with
             // INVALID_ARGUMENT when the user's SMILES cannot be parsed -- that
             // is a fact about the input, and reporting it as "service
@@ -71,7 +73,11 @@ impl IntoResponse for ApiError {
             }
         };
 
-        (status, Json(json!({ "error": { "code": code, "message": message } }))).into_response()
+        (
+            status,
+            Json(json!({ "error": { "code": code, "message": message } })),
+        )
+            .into_response()
     }
 }
 

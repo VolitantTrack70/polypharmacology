@@ -40,7 +40,11 @@ pub struct Defaults {
 
 impl Default for Defaults {
     fn default() -> Self {
-        Self { tanimoto: 0.40, pchembl: 6.0, similar_limit: 250 }
+        Self {
+            tanimoto: 0.40,
+            pchembl: 6.0,
+            similar_limit: 250,
+        }
     }
 }
 
@@ -49,17 +53,15 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::from_filename("../../.env").ok();
 
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "info,chemmed_api=debug".into()))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,chemmed_api=debug".into()))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://chemmed:change_me_locally@localhost:5432/chemmed".into());
-    let chem_addr = std::env::var("CHEMWORKER_GRPC_ADDR")
-        .unwrap_or_else(|_| "http://localhost:50051".into());
-    let bind_addr = std::env::var("API_BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let chem_addr =
+        std::env::var("CHEMWORKER_GRPC_ADDR").unwrap_or_else(|_| "http://localhost:50051".into());
+    let bind_addr = std::env::var("API_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
 
     let db = PgPoolOptions::new()
         .max_connections(16)
@@ -72,7 +74,11 @@ async fn main() -> anyhow::Result<()> {
     let chem = ChemWorker::connect_lazy(&chem_addr)?;
     tracing::info!(addr = %chem_addr, "chemworker client ready (lazy)");
 
-    let state = AppState { db, chem, defaults: Defaults::default() };
+    let state = AppState {
+        db,
+        chem,
+        defaults: Defaults::default(),
+    };
 
     let api = Router::new()
         .route("/health", get(routes::health::health))

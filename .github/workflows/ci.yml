@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # RDKit wheels lag the newest CPython; 3.12 is the supported target.
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  ingest:
+    name: ingest (Python + RDKit + Postgres)
+    runs-on: ubuntu-latest
+
+    # The loader tests exercise real upsert and foreign-key behaviour, so they
+    # need a real database. They create and drop their own scratch database.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chemmed
+          POSTGRES_PASSWORD: chemmed_ci
+          POSTGRES_DB: chemmed
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://chemmed:chemmed_ci@localhost:5432/chemmed
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        working-directory: services/ingest
+        run: |
+          uv venv --python ${{ env.PYTHON_VERSION }} .venv
+          uv pip install --python .venv -e ".[dev]"
+
+      - name: Lint
+        working-directory: services/ingest
+        run: .venv/bin/ruff check src tests benchmarks
+
+      - name: Allow the test role to create its scratch database
+        run: |
+          PGPASSWORD=chemmed_ci psql -h localhost -U chemmed -d chemmed \
+            -c "ALTER ROLE chemmed CREATEDB;"
+
+      - name: Test
+        working-directory: services/ingest
+        # The e2e suite skips itself when the API is unreachable, which it is
+        # here -- those run against a deployed stack, not in CI.
+        run: .venv/bin/python -m pytest -q
+
+  chemworker:
+    name: chemworker (gRPC service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        working-directory: services/chemworker
+        run: |
+          uv venv --python ${{ env.PYTHON_VERSION }} .venv
+          uv pip install --python .venv -e ".[dev]"
+
+      - name: Generate protobuf stubs
+        working-directory: services/chemworker
+        # grpc_tools bundles its own protoc, so no system install is needed
+        # here. The script also patches grpcio's flat import, without which
+        # the package cannot be imported at all.
+        run: .venv/bin/python gen_proto.py
+
+      - name: Lint
+        working-directory: services/chemworker
+        run: .venv/bin/ruff check src tests gen_proto.py
+
+      - name: Test
+        working-directory: services/chemworker
+        run: .venv/bin/python -m pytest -q
+
+  api:
+    name: api (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        # tonic-build shells out to a real protoc, unlike the Python side.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/api
+
+      - name: Format
+        working-directory: services/api
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: services/api
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: services/api
+        run: cargo test

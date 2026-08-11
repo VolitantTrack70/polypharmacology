@@ -38,13 +38,30 @@ pub async fn status(State(state): State<AppState>) -> ApiResult<Json<StatusRespo
         .await
     {
         Ok(_) => ComponentStatus::Up,
-        Err(e) => ComponentStatus::Down { reason: e.to_string() },
+        Err(e) => ComponentStatus::Down {
+            reason: e.to_string(),
+        },
     };
 
     let (chemworker, compounds_indexed, fp_signature) = match state.chem.status().await {
-        Ok(s) => (ComponentStatus::Up, Some(s.compound_count), Some(s.fp_signature)),
-        Err(e) => (ComponentStatus::Down { reason: e.message().to_string() }, None, None),
+        Ok(s) => (
+            ComponentStatus::Up,
+            Some(s.compound_count),
+            Some(s.fp_signature),
+        ),
+        Err(e) => (
+            ComponentStatus::Down {
+                reason: e.message().to_string(),
+            },
+            None,
+            None,
+        ),
     };
 
-    Ok(Json(StatusResponse { database, chemworker, compounds_indexed, fp_signature }))
+    Ok(Json(StatusResponse {
+        database,
+        chemworker,
+        compounds_indexed,
+        fp_signature,
+    }))
 }
