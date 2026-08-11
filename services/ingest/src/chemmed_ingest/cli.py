@@ -226,22 +226,60 @@ def load_cmd(release: str = typer.Option("35")) -> None:
 
     from chemmed_ingest.load.postgres import load_table, record_release, refresh_derived
 
-    # Order matters: parents before children, for the FK guards.
-    order = [
-        "compound", "target", "protein", "target_component",
-        "pathway", "pathway_hierarchy", "protein_pathway",
-        "activity", "compound_fingerprint",
+    # Order matters twice over: parents before children for the FK guards, and
+    # each table is stamped with the release of the source it actually came
+    # from. Stamping Reactome rows with a ChEMBL release id would make the
+    # provenance table worse than useless -- confidently wrong.
+    order: list[tuple[str, str]] = [
+        ("compound", "chembl"),
+        ("target", "chembl"),
+        ("protein", "chembl"),          # from ChEMBL's component_sequences
+        ("target_component", "chembl"),
+        ("pathway", "reactome"),
+        ("pathway_hierarchy", "reactome"),
+        ("protein_pathway", "reactome"),
+        ("activity", "chembl"),
+        ("compound_fingerprint", "chembl"),
     ]
 
     counts: dict[str, int] = {}
     with psycopg.connect(DATABASE_URL) as conn:
-        rid = record_release(conn, "chembl", release, CHEMBL_URL.format(v=release))
-        for table in order:
+        releases = {
+            "chembl": record_release(conn, "chembl", release, CHEMBL_URL.format(v=release)),
+            "reactome": record_release(
+                conn, "reactome", _reactome_version(), REACTOME_BASE
+            ),
+        }
+
+        for table, source in order:
             path = PATHS.processed / f"{table}.parquet"
-            counts[table] = load_table(conn, table, path, release_id=rid)
+            counts[table] = load_table(conn, table, path, release_id=releases[source])
+
+        # Backfill the row counts now that they are known, so the provenance
+        # row records what was actually loaded rather than an empty object.
+        for source in releases:
+            rows = {table: counts[table] for table, src in order if src == source}
+            record_release(conn, source, _version_for(source, release), row_counts=rows)
+
         refresh_derived(conn)
 
     _print_counts("Loaded", counts)
+
+
+def _reactome_version() -> str:
+    """Reactome publishes only a rolling 'current' download with no version in
+    the URL, so the file's modification date is the honest identifier."""
+    from datetime import datetime, timezone
+
+    marker = PATHS.raw / "ReactomePathways.txt"
+    if not marker.exists():
+        return "unknown"
+    stamp = datetime.fromtimestamp(marker.stat().st_mtime, tz=timezone.utc)
+    return f"downloaded-{stamp:%Y-%m-%d}"
+
+
+def _version_for(source: str, chembl_release: str) -> str:
+    return chembl_release if source == "chembl" else _reactome_version()
 
 
 @app.command()

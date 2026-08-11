@@ -136,6 +136,7 @@ def load_table(
         # Only stamp provenance on tables that actually carry it -- the pure
         # join tables (target_component, pathway_hierarchy, protein_pathway,
         # compound_fingerprint) have no release_id column.
+        stamped_release = False
         if release_id is not None and "release_id" not in columns:
             cur.execute(
                 """
@@ -148,6 +149,7 @@ def load_table(
             if cur.fetchone() is not None:
                 collist += ", release_id"
                 select_cols += f", {int(release_id)}"
+                stamped_release = True
 
         # Upsert rather than DO NOTHING. Re-ingesting a newer ChEMBL release
         # must actually refresh existing rows -- with DO NOTHING, a corrected
@@ -155,6 +157,12 @@ def load_table(
         # Pure join tables have no non-key columns, so they fall back to
         # DO NOTHING (an empty SET clause is a syntax error).
         updatable = [c for c in columns if c not in spec["pk"]]
+        # release_id must be refreshed too. It is not one of the Parquet
+        # columns, so without this a row keeps whichever release first loaded
+        # it forever -- and provenance that is silently stale is worse than no
+        # provenance, because it looks authoritative.
+        if stamped_release:
+            updatable.append("release_id")
         if updatable:
             assignments = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in updatable)
             action = f"DO UPDATE SET {assignments}"

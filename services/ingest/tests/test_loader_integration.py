@@ -197,6 +197,31 @@ class TestProvenance:
         b = record_release(db, "reactome", "v-same")
         assert a == b
 
+    def test_release_id_is_refreshed_on_reload(self, db, tmp_path):
+        """release_id is not a Parquet column, so it has to be added to the
+        upsert's SET clause explicitly. Without that a row keeps whichever
+        release first loaded it forever -- and stale provenance is worse than
+        none, because it still looks authoritative."""
+        first = record_release(db, "chembl", "rel-1")
+        second = record_release(db, "chembl", "rel-2")
+        assert first != second
+
+        path = write_parquet(tmp_path, "compound", [
+            {"chembl_id": "C_RELOAD", "canonical_smiles": "CCN"},
+        ])
+        load_table(db, "compound", path, release_id=first)
+        load_table(db, "compound", path, release_id=second)
+
+        with db.cursor() as cur:
+            cur.execute("SELECT release_id FROM chem.compound WHERE chembl_id='C_RELOAD'")
+            assert cur.fetchone()[0] == second
+
+    def test_row_counts_are_recorded(self, db):
+        rid = record_release(db, "chembl", "with-counts", row_counts={"compound": 42})
+        with db.cursor() as cur:
+            cur.execute("SELECT row_counts FROM chem.data_release WHERE release_id = %s", (rid,))
+            assert cur.fetchone()[0] == {"compound": 42}
+
 
 class TestMigrations:
     def test_age_migration_skipped_without_extension(self, db):
