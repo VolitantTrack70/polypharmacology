@@ -23,8 +23,15 @@ The scan is preceded by a cheap exact bound. Since c <= min(a, b) and
     Ts(A,B) <= min(a, b) / max(a, b)
 
 so any compound whose popcount falls outside [t*a, a/t] cannot reach threshold
-t and is skipped without touching its bits. On a typical drug-like query this
-discards 70-90% of the database before any popcounting happens.
+t and is skipped without touching its bits.
+
+How much that prune actually saves depends entirely on the threshold, and it is
+easy to overestimate. Measured over 2.4M drug-like fingerprints it discards
+68.6% at t=0.85 but *nothing* at t=0.40, because drug-like molecules have
+similar bit counts and min/max rarely drops below ~0.44. The bound is free and
+exact so it stays, but it is not what makes this fast -- a vectorised popcount
+over 600 MB is just quick (~400 ms at the default threshold).
+See docs/decisions/0001 and benchmarks/bench_similarity.py.
 """
 
 from __future__ import annotations

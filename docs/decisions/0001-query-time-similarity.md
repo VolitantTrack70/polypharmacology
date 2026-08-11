@@ -45,14 +45,52 @@ Ts(A,B) ≤ min(a,b) / max(a,b)
 ```
 
 so any compound whose popcount falls outside `[t·a, a/t]` cannot reach threshold
-`t` and is skipped without its bits ever being touched. On a typical drug-like
-query this discards most of the database before any real work happens. The bound
-is exact, not heuristic — it never drops a hit that would have qualified, and
+`t` and is skipped without its bits ever being touched. The bound is exact, not
+heuristic — it never drops a hit that would have qualified, and
 `test_popcount_bound_does_not_drop_valid_hits` asserts exactly that against a
 brute-force baseline.
 
 Search is exact. No LSH, no ANN. At this scale a linear scan is fast enough that
 trading away exactness would buy nothing.
+
+## Measured
+
+`benchmarks/bench_similarity.py`, 2.4M synthetic fingerprints with drug-like
+sparsity (40–90 of 2048 bits set), 12-core desktop:
+
+| | |
+|---|---|
+| Fingerprint matrix | **614 MB** |
+| Popcount vector | 10 MB |
+| Total resident | **624 MB** |
+
+| Threshold | Median | p95 | Pruned by the bound |
+|---|---|---|---|
+| 0.30 | 516 ms | 635 ms | 0.0% |
+| **0.40** (default) | **408 ms** | 426 ms | **0.0%** |
+| 0.55 | 352 ms | 387 ms | 13.7% |
+| 0.70 | 341 ms | 348 ms | 13.7% |
+| 0.85 | 214 ms | 228 ms | 68.6% |
+
+**The memory and latency claims hold. The pruning claim did not.**
+
+An earlier draft of this ADR asserted the bound "discards 70–90% of the database
+on a typical query". That is true only at high thresholds. At the default of
+0.40 it prunes **nothing**, because drug-like molecules have similar bit counts:
+with query and target popcounts both in 40–90, the ratio `min/max` rarely falls
+below 0.44, so almost every compound survives the bound and gets popcounted.
+
+The prune is still worth keeping — it is free, exact, and pays off exactly where
+cost would otherwise be highest — but it is not what makes this fast. What makes
+it fast is that a vectorised popcount over 600 MB is simply quick.
+
+Caveat: these are synthetic fingerprints with a deliberately narrow popcount
+range. Real ChEMBL spans fragments to large natural products, so the real
+distribution is wider and pruning at 0.40 should be somewhat better than 0%.
+Re-run the benchmark against the real index once ChEMBL is ingested.
+
+Sub-second at every threshold is the number that matters, and it holds with
+~2× headroom.
 
 ## Consequences
 
