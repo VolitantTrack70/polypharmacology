@@ -170,7 +170,14 @@ def main() -> None:
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
     health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
 
-    server.add_insecure_port(addr)
+    try:
+        server.add_insecure_port(addr)
+    except RuntimeError as exc:
+        raise SystemExit(
+            f"cannot bind {addr} -- another chemworker is probably already "
+            f"running. Set CHEMWORKER_BIND to use a different port.\n{exc}"
+        ) from exc
+
     server.start()
     log.info("chemworker listening on %s", addr)
 
