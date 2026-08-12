@@ -108,6 +108,14 @@ pub struct Edge {
     pub pchembl: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n_measurements: Option<i64>,
+    /// Distinct papers reporting this pair. The strongest evidence signal we
+    /// have -- ten measurements from one lab is weaker than three from three.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_documents: Option<i64>,
+    /// Mean across measurements. Far from `pchembl` (the max) means the
+    /// headline affinity rests on an outlier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_pchembl: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_types: Option<Vec<String>>,
 }
@@ -119,7 +127,9 @@ pub struct CascadeRow {
     pub pref_name: Option<String>,
     pub organism: Option<String>,
     pub max_pchembl: Option<f32>,
+    pub mean_pchembl: Option<f32>,
     pub n_measurements: Option<i64>,
+    pub n_documents: Option<i64>,
     pub activity_types: Option<Vec<String>>,
     pub reactome_id: Option<String>,
     pub pathway_name: Option<String>,
@@ -142,7 +152,9 @@ ranked AS (
         t.pref_name,
         t.organism,
         b.max_pchembl,
+        b.mean_pchembl,
         b.n_measurements,
+        b.n_documents,
         b.activity_types,
         tp.reactome_id,
         tp.pathway_name,
@@ -171,7 +183,7 @@ ranked AS (
 )
 SELECT
     chembl_id, target_chembl_id, pref_name, organism,
-    max_pchembl, n_measurements, activity_types,
+    max_pchembl, mean_pchembl, n_measurements, n_documents, activity_types,
     reactome_id, pathway_name, biological_domain
 FROM ranked
 WHERE reactome_id IS NULL OR rn <= $5
@@ -223,7 +235,9 @@ pub fn build_graph(rows: &[CascadeRow], similarity: &HashMap<String, f32>) -> Gr
                 kind: "similar_to",
                 tanimoto: ts,
                 pchembl: None,
+                mean_pchembl: None,
                 n_measurements: None,
+                n_documents: None,
                 activity_types: None,
             });
         }
@@ -249,7 +263,9 @@ pub fn build_graph(rows: &[CascadeRow], similarity: &HashMap<String, f32>) -> Gr
                 kind: "binds_to",
                 tanimoto: None,
                 pchembl: row.max_pchembl,
+                mean_pchembl: row.mean_pchembl,
                 n_measurements: row.n_measurements,
+                n_documents: row.n_documents,
                 activity_types: row.activity_types.clone(),
             });
         }
@@ -278,7 +294,9 @@ pub fn build_graph(rows: &[CascadeRow], similarity: &HashMap<String, f32>) -> Gr
                     kind: "participates_in",
                     tanimoto: None,
                     pchembl: None,
+                    mean_pchembl: None,
                     n_measurements: None,
+                    n_documents: None,
                     activity_types: None,
                 });
             }
@@ -416,7 +434,9 @@ mod tests {
             pref_name: Some(format!("{target} name")),
             organism: Some("Homo sapiens".into()),
             max_pchembl: pchembl,
+            mean_pchembl: pchembl,
             n_measurements: Some(3),
+            n_documents: Some(2),
             activity_types: Some(vec!["IC50".into()]),
             reactome_id: pathway.map(Into::into),
             pathway_name: pathway.map(|p| format!("{p} pathway")),
@@ -519,6 +539,40 @@ mod tests {
         // Affinity belongs on the binding edge, not the similarity edge.
         assert_eq!(edges_of(&g, "similar_to")[0].pchembl, None);
         assert_eq!(edges_of(&g, "binds_to")[0].pchembl, Some(7.0));
+    }
+
+    #[test]
+    fn evidence_fields_reach_the_binding_edge() {
+        // A single-measurement outlier must be distinguishable from a
+        // well-replicated result, so both counts and the mean travel with it.
+        let mut r = row("C1", "T1", Some("P1"), Some(10.2));
+        r.mean_pchembl = Some(10.2);
+        r.n_measurements = Some(1);
+        r.n_documents = Some(1);
+
+        let g = build_graph(&[r], &sim(&[("C1", 1.0)]));
+        let e = edges_of(&g, "binds_to")[0];
+        assert_eq!(e.pchembl, Some(10.2));
+        assert_eq!(e.mean_pchembl, Some(10.2));
+        assert_eq!(e.n_measurements, Some(1));
+        assert_eq!(e.n_documents, Some(1));
+    }
+
+    #[test]
+    fn evidence_fields_are_absent_on_non_binding_edges() {
+        let g = build_graph(
+            &[row("C1", "T1", Some("P1"), Some(7.0))],
+            &sim(&[("C1", 0.6)]),
+        );
+        for kind in ["similar_to", "participates_in"] {
+            for e in edges_of(&g, kind) {
+                assert_eq!(
+                    e.n_documents, None,
+                    "{kind} should carry no evidence counts"
+                );
+                assert_eq!(e.mean_pchembl, None);
+            }
+        }
     }
 
     #[test]

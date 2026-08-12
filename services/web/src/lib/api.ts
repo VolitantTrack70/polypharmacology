@@ -40,8 +40,12 @@ export interface GraphEdge {
 	target: string;
 	kind: EdgeKind;
 	tanimoto?: number;
+	/** Best observed affinity. Can rest on a single outlier -- compare mean. */
 	pchembl?: number;
+	mean_pchembl?: number;
 	n_measurements?: number;
+	/** Distinct papers. The strongest evidence signal available. */
+	n_documents?: number;
 	activity_types?: string[];
 }
 

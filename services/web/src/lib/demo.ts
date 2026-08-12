@@ -130,7 +130,9 @@ export function demoOffTargets(params: {
 				target: target.id,
 				kind: 'binds_to',
 				pchembl: affinity,
+				mean_pchembl: Math.round((affinity - 0.3) * 100) / 100,
 				n_measurements: Math.round(affinity * 7),
+				n_documents: Math.max(1, Math.round(affinity / 2)),
 				activity_types: ['IC50', 'Kd']
 			});
 

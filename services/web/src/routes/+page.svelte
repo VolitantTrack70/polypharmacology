@@ -18,7 +18,9 @@
 	let source = $state<DataSource>('unknown');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
-	let sortBy = $state<'affinity' | 'similarity'>('affinity');
+	let sortBy = $state<'affinity' | 'evidence' | 'similarity'>('evidence');
+	/** Minimum independent papers. 1 = show everything. */
+	let minPapers = $state(1);
 
 	// Display filters. These never refetch -- the API returns the complete
 	// result and the canvas shows a subset of it. The table stays complete.
@@ -60,10 +62,13 @@
 
 	let rankedTargets = $derived.by(() => {
 		const q = targetFilter.trim().toLowerCase();
+		// Driven by the table's ordering so the canvas and the table agree on
+		// what "top N" means under the current sort and evidence filter.
+		const order = new Map(rows.map((r, i) => [r.id, i]));
 		return (result?.nodes ?? [])
-			.filter((n) => n.kind === 'target')
+			.filter((n) => n.kind === 'target' && order.has(n.id))
 			.filter((n) => !q || n.label.toLowerCase().includes(q))
-			.sort((a, b) => (targetAffinity.get(b.id) ?? 0) - (targetAffinity.get(a.id) ?? 0));
+			.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 	});
 
 	let displayGraph = $derived.by(() => {
@@ -126,32 +131,44 @@
 					.map((e) => nodeById.get(e.target)?.label)
 					.filter((l): l is string => !!l);
 
-				// Which similar compound gives the strongest evidence for this target.
-				const via = binding
-					.map((e) => ({
-						compound: nodeById.get(e.source),
-						pchembl: e.pchembl ?? 0,
-						n: e.n_measurements ?? 0
-					}))
-					.sort((a, b) => b.pchembl - a.pchembl);
+				// Report the edge behind the headline affinity, not a blend of
+				// all of them -- that edge is the claim being made, so its
+				// evidence is the evidence to show.
+				const best = [...binding].sort((a, b) => (b.pchembl ?? 0) - (a.pchembl ?? 0))[0];
 
 				return {
 					id: target.id,
 					gene: target.label,
 					organism: target.organism,
-					bestPchembl: Math.max(...binding.map((e) => e.pchembl ?? 0), 0),
-					bestTanimoto: Math.max(...via.map((v) => v.compound?.tanimoto ?? 0), 0),
-					viaCompound: via[0]?.compound?.label ?? '--',
-					measurements: via.reduce((s, v) => s + v.n, 0),
+					bestPchembl: best?.pchembl ?? 0,
+					meanPchembl: best?.mean_pchembl ?? null,
+					measurements: best?.n_measurements ?? 0,
+					documents: best?.n_documents ?? 0,
+					bestTanimoto: Math.max(
+						...binding.map((e) => nodeById.get(e.source)?.tanimoto ?? 0),
+						0
+					),
+					viaCompound: nodeById.get(best?.source ?? '')?.label ?? '--',
 					pathways
 				};
 			})
-			.sort((a, b) =>
-				sortBy === 'affinity'
-					? b.bestPchembl - a.bestPchembl
-					: b.bestTanimoto - a.bestTanimoto
-			);
+			// "1 (all)" must mean all, even if a release ever yields a 0 or missing
+			// document count -- otherwise the option silently drops targets.
+			.filter((r) => minPapers <= 1 || r.documents >= minPapers)
+			.sort((a, b) => {
+				if (sortBy === 'similarity') return b.bestTanimoto - a.bestTanimoto;
+				if (sortBy === 'affinity') return b.bestPchembl - a.bestPchembl;
+				// Evidence: most independently replicated first, then typical
+				// affinity. Deliberately not a blended score -- an opaque number
+				// is worse than two columns you can read.
+				return b.documents - a.documents || (b.meanPchembl ?? 0) - (a.meanPchembl ?? 0);
+			});
 	});
+
+	/** Targets hidden purely by the evidence filter. */
+	let hiddenByEvidence = $derived(
+		(result?.nodes ?? []).filter((n) => n.kind === 'target').length - rows.length
+	);
 
 	async function run() {
 		if (!smiles.trim()) return;
@@ -176,6 +193,11 @@
 	function useExample(s: string) {
 		smiles = s;
 		run();
+	}
+
+	/** Headline affinity more than 1 log unit above the mean rests on an outlier. */
+	function isOutlier(r: { bestPchembl: number; meanPchembl: number | null }): boolean {
+		return r.meanPchembl != null && r.bestPchembl - r.meanPchembl >= 1;
 	}
 
 	/** pChEMBL is -log10(molar). 6.0 -> 1000 nM. */
@@ -323,7 +345,8 @@
 						</span>
 					</div>
 					<p class="muted note">
-						Filters the canvas only. The table below always lists every target found.
+						Top-N, name and layer controls affect the canvas only. The papers filter is a
+						data-quality cut and applies to the table as well.
 					</p>
 
 					<div class="display-controls">
@@ -351,7 +374,24 @@
 							<input type="checkbox" bind:checked={showPathways} />
 							<span>Show pathways</span>
 						</label>
+
+						<label>
+							<span>Min. papers</span>
+							<select bind:value={minPapers}>
+								<option value={1}>1 (all)</option>
+								<option value={2}>2+</option>
+								<option value={3}>3+</option>
+								<option value={5}>5+</option>
+							</select>
+						</label>
 					</div>
+
+					{#if hiddenByEvidence > 0}
+						<p class="evidence-note">
+							{hiddenByEvidence} of {result.stats.targets} targets hidden — reported in fewer than
+							{minPapers} independent papers.
+						</p>
+					{/if}
 
 					{#if rankedTargets.length === 0 && targetFilter.trim()}
 						<p class="warn">No target matches "{targetFilter}".</p>
@@ -375,11 +415,14 @@
 					<div class="results-head">
 						<h2>Predicted off-targets</h2>
 						<div class="sort">
+							<button class:on={sortBy === 'evidence'} onclick={() => (sortBy = 'evidence')}>
+								evidence
+							</button>
 							<button class:on={sortBy === 'affinity'} onclick={() => (sortBy = 'affinity')}>
-								by affinity
+								affinity
 							</button>
 							<button class:on={sortBy === 'similarity'} onclick={() => (sortBy = 'similarity')}>
-								by similarity
+								similarity
 							</button>
 						</div>
 					</div>
@@ -388,8 +431,10 @@
 						<thead>
 							<tr>
 								<th>Target</th>
-								<th>Affinity</th>
-								<th>Evidence via</th>
+								<th>Max affinity</th>
+								<th>Mean</th>
+								<th>Papers</th>
+								<th>Via</th>
 								<th>Tanimoto</th>
 								<th>Pathways</th>
 							</tr>
@@ -405,12 +450,19 @@
 										<span class="mono">{row.bestPchembl.toFixed(1)}</span>
 										<small>{nanomolar(row.bestPchembl)}</small>
 									</td>
-									<td>
-										{row.viaCompound}
+									<td class:outlier={isOutlier(row)}>
+										<span class="mono">
+											{row.meanPchembl != null ? row.meanPchembl.toFixed(1) : '--'}
+										</span>
 										<small>
-											{row.measurements} measurement{row.measurements === 1 ? '' : 's'}
+											{row.measurements} meas{row.measurements === 1 ? '' : '.'}
 										</small>
 									</td>
+									<td>
+										<span class="mono" class:thin={row.documents <= 1}>{row.documents}</span>
+										{#if row.documents <= 1}<small>unreplicated</small>{/if}
+									</td>
+									<td>{row.viaCompound}</td>
 									<td>
 										<div class="bar" style:--w="{row.bestTanimoto * 100}%">
 											<span>{row.bestTanimoto.toFixed(2)}</span>
@@ -796,6 +848,14 @@
 	.display-controls .check input {
 		accent-color: var(--accent);
 	}
+	.evidence-note {
+		margin: 8px 0 0;
+		padding: 4px 8px;
+		font-size: 11px;
+		color: var(--warn);
+		border-left: 3px solid var(--warn);
+		background: #fdf6e8;
+	}
 
 	.graph {
 		height: 520px;
@@ -905,6 +965,20 @@
 		line-height: 14px;
 		padding-left: 4px;
 		font-variant-numeric: tabular-nums;
+	}
+	/* Headline affinity resting on an outlier: flag it rather than hide it. */
+	td.outlier .mono {
+		color: var(--warn);
+	}
+	td.outlier::after {
+		content: ' outlier';
+		font-size: 9px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--warn);
+	}
+	.mono.thin {
+		color: var(--warn);
 	}
 	.pw {
 		max-width: 300px;
