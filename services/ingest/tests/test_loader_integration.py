@@ -22,6 +22,7 @@ psycopg = pytest.importorskip("psycopg")
 from chemmed_ingest.config import DATABASE_URL, REPO_ROOT  # noqa: E402
 from chemmed_ingest.load.postgres import (  # noqa: E402
     apply_migrations,
+    deferred_indexes,
     load_table,
     record_release,
 )
@@ -242,6 +243,69 @@ def _extension_present(conn, name: str) -> bool:
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM pg_available_extensions WHERE name = %s", (name,))
         return cur.fetchone() is not None
+
+
+class TestDeferredIndexes:
+    def _indexes(self, db, table: str) -> dict[str, bool]:
+        """{index_name: is_unique} for one table."""
+        with db.cursor() as cur:
+            cur.execute(
+                """
+                SELECT c.relname, x.indisunique
+                FROM pg_index x
+                JOIN pg_class c     ON c.oid = x.indexrelid
+                JOIN pg_class t     ON t.oid = x.indrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE n.nspname = 'chem' AND t.relname = %s
+                """,
+                (table,),
+            )
+            return dict(cur.fetchall())
+
+    def test_secondary_indexes_are_dropped_and_rebuilt(self, db):
+        before = self._indexes(db, "activity")
+        secondary = {n for n, uniq in before.items() if not uniq}
+        assert secondary, "fixture precondition: activity should have secondary indexes"
+
+        with deferred_indexes(db, ["activity"]) as n:
+            assert n == len(secondary)
+            during = self._indexes(db, "activity")
+            assert not (secondary & set(during)), "secondary indexes should be gone"
+
+        assert self._indexes(db, "activity") == before
+
+    def test_unique_indexes_are_never_dropped(self, db):
+        """ON CONFLICT needs the unique index on its conflict target."""
+        before = self._indexes(db, "compound")
+        unique = {n for n, uniq in before.items() if uniq}
+
+        with deferred_indexes(db, ["compound"]):
+            during = set(self._indexes(db, "compound"))
+            assert unique <= during
+
+    def test_indexes_are_rebuilt_even_if_the_load_fails(self, db):
+        before = self._indexes(db, "activity")
+        with pytest.raises(RuntimeError), deferred_indexes(db, ["activity"]):
+            raise RuntimeError("simulated load failure")
+        assert self._indexes(db, "activity") == before
+
+    def test_load_still_works_with_indexes_deferred(self, db, tmp_path):
+        load_table(db, "compound", write_parquet(tmp_path, "compound", [
+            {"chembl_id": "C_DEFER", "canonical_smiles": "CCCC"},
+        ]))
+        load_table(db, "target", write_parquet(tmp_path, "target", [
+            {"target_chembl_id": "T_DEFER", "pref_name": "T"},
+        ]))
+        path = write_parquet(tmp_path, "activity", [
+            {"activity_id": 9001, "chembl_id": "C_DEFER",
+             "target_chembl_id": "T_DEFER", "pchembl_value": 7.5},
+        ])
+        with deferred_indexes(db, ["activity"]):
+            assert load_table(db, "activity", path) == 1
+
+        with db.cursor() as cur:
+            cur.execute("SELECT count(*) FROM chem.activity WHERE activity_id = 9001")
+            assert cur.fetchone()[0] == 1
 
 
 class TestMissingFiles:

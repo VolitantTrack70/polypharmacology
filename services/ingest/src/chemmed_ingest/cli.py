@@ -377,17 +377,29 @@ def load_cmd(
     fresh: bool = typer.Option(
         False, help="Empty every ingested table first. Required when replacing fixture data."
     ),
+    defer_indexes: bool | None = typer.Option(
+        None,
+        help="Drop secondary indexes during the load and rebuild after. "
+        "Defaults to on for --fresh, off otherwise.",
+    ),
 ) -> None:
     """COPY the Parquet into Postgres, then refresh derived views."""
     _setup_logging()
     import psycopg
 
     from chemmed_ingest.load.postgres import (
+        LOADABLE_TABLES,
+        deferred_indexes,
         load_table,
         record_release,
         refresh_derived,
         truncate_all,
     )
+
+    # Rebuilding indexes once beats maintaining them per row on a full load,
+    # but is pure overhead on a small incremental one.
+    if defer_indexes is None:
+        defer_indexes = fresh
 
     # Order matters twice over: parents before children for the FK guards, and
     # each table is stamped with the release of the source it actually came
@@ -416,9 +428,17 @@ def load_cmd(
             ),
         }
 
-        for table, source in order:
-            path = PATHS.processed / f"{table}.parquet"
-            counts[table] = load_table(conn, table, path, release_id=releases[source])
+        def _load_everything() -> None:
+            for table, source in order:
+                path = PATHS.processed / f"{table}.parquet"
+                counts[table] = load_table(conn, table, path, release_id=releases[source])
+
+        if defer_indexes:
+            with deferred_indexes(conn, LOADABLE_TABLES) as n:
+                console.print(f"[dim]deferred {n} secondary indexes[/dim]")
+                _load_everything()
+        else:
+            _load_everything()
 
         # Backfill the row counts now that they are known, so the provenance
         # row records what was actually loaded rather than an empty object.
@@ -536,7 +556,8 @@ def run_all(
     parse(release=release, limit=limit, species="Homo sapiens")
     fingerprint(workers=0, limit=limit)
     migrate()
-    load_cmd(release=release, fresh=fresh)
+    # None = follow the fresh-implies-defer policy in load_cmd.
+    load_cmd(release=release, fresh=fresh, defer_indexes=None)
     index(source="parquet")
     console.print("\n[bold green]pipeline complete[/bold green]")
     console.print(f"config: {FP.signature}, default cutoff {THRESHOLDS.tanimoto}")

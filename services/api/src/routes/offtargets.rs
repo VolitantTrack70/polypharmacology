@@ -136,7 +136,11 @@ ranked AS (
         tp.reactome_id,
         tp.pathway_name,
         tp.biological_domain,
-        ROW_NUMBER() OVER (
+        -- DENSE_RANK, not ROW_NUMBER: ranks distinct pathways per target, so
+        -- every compound bound to that target sees the same top-N. ROW_NUMBER
+        -- numbered across compounds too, capping total rows and silently
+        -- dropping compound->target edges.
+        DENSE_RANK() OVER (
             PARTITION BY b.target_chembl_id
             ORDER BY tp.depth_from_root DESC, tp.pathway_name
         ) AS rn

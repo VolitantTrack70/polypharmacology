@@ -175,15 +175,35 @@ class TestPathwayScope:
                 per_target[e["source"]] = per_target.get(e["source"], 0) + 1
         assert all(n <= 2 for n in per_target.values()), per_target
 
-    def test_targets_survive_an_aggressive_cap(self):
-        """The cap must not delete targets whose pathways were all filtered."""
-        loose = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.35}).json()
+    def test_cap_changes_only_pathways_never_compounds_or_targets(self):
+        """The pathway cap must not remove compounds or targets.
+
+        Regression: the cap used ROW_NUMBER partitioned by target, which
+        numbered across compounds too, so the limit truncated compound->target
+        edges as well. It silently dropped a third of the compounds.
+        """
+        loose = post(
+            "/offtargets",
+            {"smiles": IMATINIB, "tanimoto": 0.40, "max_pathways_per_target": 500},
+        ).json()
         tight = post(
             "/offtargets",
-            {"smiles": IMATINIB, "tanimoto": 0.35, "pathway_scope": "domain",
-             "max_pathways_per_target": 1},
+            {"smiles": IMATINIB, "tanimoto": 0.40, "max_pathways_per_target": 1},
         ).json()
+
+        assert tight["stats"]["similar_compounds"] == loose["stats"]["similar_compounds"]
         assert tight["stats"]["targets"] == loose["stats"]["targets"]
+        assert tight["stats"]["pathways"] < loose["stats"]["pathways"]
+
+    def test_binding_edges_are_unaffected_by_the_cap(self):
+        def binds(cap: int) -> int:
+            body = post(
+                "/offtargets",
+                {"smiles": IMATINIB, "tanimoto": 0.40, "max_pathways_per_target": cap},
+            ).json()
+            return sum(1 for e in body["edges"] if e["kind"] == "binds_to")
+
+        assert binds(1) == binds(500)
 
     def test_invalid_scope_is_rejected(self):
         r = post("/offtargets", {"smiles": IMATINIB, "pathway_scope": "nonsense"})

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -187,6 +188,50 @@ LOADABLE_TABLES = [
     "protein",
     "pathway",
 ]
+
+
+@contextmanager
+def deferred_indexes(conn: psycopg.Connection, tables: list[str]) -> Iterator[int]:
+    """Drop secondary indexes for the duration of a bulk load, then rebuild.
+
+    Maintaining an index row-by-row during a multi-million-row INSERT is much
+    slower than building it once at the end.
+
+    Unique and constraint-backed indexes are left alone: ON CONFLICT needs the
+    unique index on its conflict target, and dropping a PK would cascade.
+    Definitions come from pg_get_indexdef so there is no DDL to keep in sync.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.relname, pg_get_indexdef(c.oid)
+            FROM pg_index x
+            JOIN pg_class c      ON c.oid = x.indexrelid
+            JOIN pg_class t      ON t.oid = x.indrelid
+            JOIN pg_namespace n  ON n.oid = t.relnamespace
+            LEFT JOIN pg_constraint con ON con.conindid = c.oid
+            WHERE n.nspname = 'chem'
+              AND t.relname = ANY(%s)
+              AND con.oid IS NULL
+              AND NOT x.indisunique
+            """,
+            (tables,),
+        )
+        saved = cur.fetchall()
+
+        for name, _ in saved:
+            log.info("dropping index %s", name)
+            cur.execute(f"DROP INDEX IF EXISTS chem.{name}")
+    conn.commit()
+
+    try:
+        yield len(saved)
+    finally:
+        with conn.cursor() as cur:
+            for name, definition in saved:
+                log.info("rebuilding index %s", name)
+                cur.execute(definition)
+        conn.commit()
 
 
 def truncate_all(conn: psycopg.Connection) -> None:
