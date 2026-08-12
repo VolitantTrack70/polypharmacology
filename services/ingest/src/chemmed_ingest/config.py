@@ -93,6 +93,14 @@ class Paths:
 
 @dataclass(frozen=True)
 class KafkaConfig:
+    """Not yet consumed by any code path.
+
+    docker-compose provisions a broker and these topic names are the intended
+    contract, but fingerprinting currently uses a local process pool -- the
+    right tool on one machine. Kept so the topics are defined in one place if
+    the work is ever distributed across hosts.
+    """
+
     bootstrap_servers: str = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     topic_compounds: str = _env("KAFKA_TOPIC_COMPOUNDS", "chemmed.compounds.raw")
     topic_fingerprints: str = _env("KAFKA_TOPIC_FINGERPRINTS", "chemmed.compounds.fingerprinted")
