@@ -211,6 +211,35 @@ class TestPathwayScope:
         assert r.json()["error"]["code"] == "bad_request"
 
 
+class TestTruncationIsDisclosed:
+    """Results used to be capped at 250 with no indication.
+
+    For imatinib that surfaced 54 of 133 reachable targets -- including
+    hiding PDGFR-alpha and the Bcr/Abl fusion protein, both textbook targets.
+    Silently dropping evidence is the worst failure mode for a tool whose
+    purpose is not missing off-targets.
+    """
+
+    def test_matched_count_is_reported(self):
+        body = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40}).json()
+        assert body["stats"]["similar_matched"] >= body["stats"]["similar_compounds"]
+
+    def test_truncation_is_flagged_when_it_happens(self):
+        small = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40, "limit": 10}).json()
+        assert small["stats"]["truncated"] is True
+        assert small["stats"]["similar_matched"] > 10
+
+    def test_default_limit_is_not_truncating_a_typical_drug(self):
+        body = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40}).json()
+        assert body["stats"]["truncated"] is False
+
+    def test_a_higher_limit_never_loses_targets(self):
+        small = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40, "limit": 50}).json()
+        large = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40, "limit": 1000}).json()
+        assert large["stats"]["targets"] >= small["stats"]["targets"]
+        assert large["stats"]["similar_matched"] == small["stats"]["similar_matched"]
+
+
 class TestConfidenceFilter:
     def test_raising_confidence_narrows_results(self):
         """MIN_CONFIDENCE_SCORE was config that nothing read; binds_to hardcodes

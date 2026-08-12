@@ -43,7 +43,12 @@ impl Default for Defaults {
         Self {
             tanimoto: 0.40,
             pchembl: 6.0,
-            similar_limit: 250,
+            // 250 truncated a typical drug query hard: imatinib matches ~966
+            // compounds at 0.40, and the top 250 surfaced only 54 of 133
+            // reachable targets. Missing an off-target is a silent failure,
+            // so the default errs toward completeness and `stats.truncated`
+            // reports whenever even this is not enough.
+            similar_limit: 1000,
         }
     }
 }

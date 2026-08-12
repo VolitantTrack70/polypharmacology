@@ -73,6 +73,14 @@ pub struct Stats {
     pub pathways: usize,
     pub compounds_scanned: u32,
     pub search_ms: f32,
+    /// Compounds matching the threshold before `limit` was applied.
+    ///
+    /// At the 0.40 default a well-studied drug can match ~1000; returning the
+    /// top 250 silently made three quarters of the neighbourhood invisible.
+    /// A hypothesis-generation tool must say when it is showing you a subset.
+    pub similar_matched: u32,
+    /// True when `similar_matched` exceeds what was returned.
+    pub truncated: bool,
 }
 
 /// Flat node list, shaped for cytoscape.js. `kind` drives styling client-side.
@@ -355,6 +363,8 @@ pub async fn off_targets(
                 pathways: 0,
                 compounds_scanned: search.searched,
                 search_ms: search.elapsed_ms,
+                similar_matched: search.total_matches,
+                truncated: false,
             },
             nodes: graph.nodes,
             edges: graph.edges,
@@ -382,6 +392,8 @@ pub async fn off_targets(
             pathways: graph.n_pathways,
             compounds_scanned: search.searched,
             search_ms: search.elapsed_ms,
+            similar_matched: search.total_matches,
+            truncated: search.total_matches as usize > hit_ids.len(),
         },
         nodes: graph.nodes,
         edges: graph.edges,
