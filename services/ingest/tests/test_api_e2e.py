@@ -132,11 +132,20 @@ class TestThresholdBehaviour:
         high = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.85}).json()
         assert high["stats"]["similar_compounds"] <= low["stats"]["similar_compounds"]
 
-    def test_blueprint_threshold_collapses_to_the_query_alone(self):
-        """docs/decisions/0002 in executable form: at 0.85 the canonical
-        polypharmacology pair disappears."""
-        body = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.85}).json()
-        assert body["stats"]["similar_compounds"] == 1
+    def test_blueprint_threshold_returns_only_near_identical_structures(self):
+        """docs/decisions/0002 in executable form.
+
+        At 0.85 only near-duplicates survive -- on real ChEMBL that is imatinib,
+        its mesylate salt, and a couple of close analogues. The meaningful
+        polypharmacology neighbours need the lower default.
+        """
+        high = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.85}).json()
+        low = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40}).json()
+
+        assert high["stats"]["similar_compounds"] < low["stats"]["similar_compounds"] / 3
+        for node in high["nodes"]:
+            if node["kind"] == "compound":
+                assert node["tanimoto"] >= 0.85
 
     def test_no_matches_is_a_result_not_an_error(self):
         """An empty result must keep the response shape so the UI can suggest

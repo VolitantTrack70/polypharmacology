@@ -55,42 +55,38 @@ trading away exactness would buy nothing.
 
 ## Measured
 
-`benchmarks/bench_similarity.py`, 2.4M synthetic fingerprints with drug-like
-sparsity (40–90 of 2048 bits set), 12-core desktop:
+`benchmarks/bench_similarity.py --real`, against the loaded ChEMBL 35 index —
+**2,474,571 real fingerprints**, 12-core desktop:
 
 | | |
 |---|---|
-| Fingerprint matrix | **614 MB** |
+| Fingerprint matrix | **633 MB** |
 | Popcount vector | 10 MB |
-| Total resident | **624 MB** |
+| Total resident | **643 MB** |
 
 | Threshold | Median | p95 | Pruned by the bound |
 |---|---|---|---|
-| 0.30 | 516 ms | 635 ms | 0.0% |
-| **0.40** (default) | **408 ms** | 426 ms | **0.0%** |
-| 0.55 | 352 ms | 387 ms | 13.7% |
-| 0.70 | 341 ms | 348 ms | 13.7% |
-| 0.85 | 214 ms | 228 ms | 68.6% |
+| 0.30 | 481 ms | 499 ms | 2.5% |
+| **0.40** (default) | **391 ms** | 417 ms | **1.5%** |
+| 0.55 | 252 ms | 375 ms | 41.5% |
+| 0.70 | 308 ms | 334 ms | 43.1% |
+| 0.85 | 51 ms | 218 ms | 51.7% |
 
-**The memory and latency claims hold. The pruning claim did not.**
+**The memory and latency claims hold** — 643 MB against a predicted ~600 MB, and
+sub-second at every threshold with room to spare.
 
-An earlier draft of this ADR asserted the bound "discards 70–90% of the database
-on a typical query". That is true only at high thresholds. At the default of
-0.40 it prunes **nothing**, because drug-like molecules have similar bit counts:
-with query and target popcounts both in 40–90, the ratio `min/max` rarely falls
-below 0.44, so almost every compound survives the bound and gets popcounted.
+**The pruning claim did not.** An earlier draft asserted the bound "discards
+70–90% of the database on a typical query". At the default 0.40 it discards
+**1.5%**. Drug-like molecules have similar bit counts, so `min/max` rarely falls
+below ~0.44 and nearly everything survives the bound.
 
-The prune is still worth keeping — it is free, exact, and pays off exactly where
-cost would otherwise be highest — but it is not what makes this fast. What makes
-it fast is that a vectorised popcount over 600 MB is simply quick.
+The prune stays — free, exact, and it does real work at 0.55+ — but it is not
+what makes this fast. A vectorised popcount over 633 MB simply is fast.
 
-Caveat: these are synthetic fingerprints with a deliberately narrow popcount
-range. Real ChEMBL spans fragments to large natural products, so the real
-distribution is wider and pruning at 0.40 should be somewhat better than 0%.
-Re-run the benchmark against the real index once ChEMBL is ingested.
-
-Sub-second at every threshold is the number that matters, and it holds with
-~2× headroom.
+Synthetic fingerprints (`--n 2400000`, no `--real`) gave 624 MB and 0.0% pruning
+at 0.40. Real data prunes better in the middle of the range (41.5% vs 13.7% at
+0.55) because ChEMBL spans fragments to large natural products, but the
+conclusion at the default threshold is unchanged.
 
 ## Consequences
 

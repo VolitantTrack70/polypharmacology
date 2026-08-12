@@ -111,9 +111,21 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=CHEMBL_35_COMPOUNDS)
     ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument(
+        "--real",
+        action="store_true",
+        help="Use the built index instead of synthetic fingerprints.",
+    )
     args = ap.parse_args()
 
-    index = build(args.n)
+    if args.real:
+        from chemmed_ingest.config import PATHS
+
+        print(f"Loading real index from {PATHS.fingerprint_index}")
+        index = FingerprintIndex.load(PATHS.fingerprint_index)
+        print(f"  {index}")
+    else:
+        index = build(args.n)
     report_memory(index)
     bench(index, [0.30, 0.40, 0.55, 0.70, 0.85], repeats=args.repeats)
 

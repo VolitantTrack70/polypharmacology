@@ -9,8 +9,9 @@ where a = popcount(A), b = popcount(B), c = popcount(A AND B).
 
 An exact popcount bound runs first: Ts(A,B) <= min(a,b)/max(a,b), so anything
 outside [t*a, a/t] is skipped untouched. It is free but not what makes this
-fast -- measured, it prunes 68.6% at t=0.85 and nothing at t=0.40, since
-drug-like molecules have similar bit counts. See docs/decisions/0001.
+fast -- measured on real ChEMBL it prunes 51.7% at t=0.85 but only 1.5% at the
+0.40 default, since drug-like molecules have similar bit counts.
+See docs/decisions/0001.
 """
 
 from __future__ import annotations
