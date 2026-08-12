@@ -11,7 +11,7 @@ const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8080/api';
 
 /**
  * When the real API is unreachable, fall back to demo fixtures so the UI is
- * always workable — and always say so loudly.
+ * always workable -- and always say so loudly.
  *
  * This exists because the backend needs Docker + Postgres + Rust + protoc to
  * come up, and the interface should not be blocked on any of that. `dataSource`
@@ -124,7 +124,7 @@ export interface OffTargetParams {
  * Try the real API; fall back to fixtures if it isn't running.
  *
  * Only *connectivity* failures fall back. A 4xx from a live API is a genuine
- * result about the query (bad SMILES, no match) and must surface as an error —
+ * result about the query (bad SMILES, no match) and must surface as an error --
  * silently swapping in demo data there would hide real bugs.
  */
 async function withDemoFallback<T>(live: () => Promise<T>, demo: () => T): Promise<T> {

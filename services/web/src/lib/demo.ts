@@ -1,5 +1,5 @@
 /**
- * DEMO FIXTURES — synthetic data for developing the UI without a backend.
+ * DEMO FIXTURES -- synthetic data for developing the UI without a backend.
  *
  * ============================ READ THIS ============================
  * This is NOT real query output. It is hand-built sample data so the
@@ -8,8 +8,8 @@
  *
  * The biology is real and well-documented (imatinib's kinase target
  * profile is textbook, the UniProt accessions are genuine, the Reactome
- * pathway names are real). The *numbers* — Tanimoto coefficients and
- * pChEMBL values — are plausible illustrative values, NOT measurements.
+ * pathway names are real). The *numbers* -- Tanimoto coefficients and
+ * pChEMBL values -- are plausible illustrative values, NOT measurements.
  *
  * Whenever this module supplies the data, the UI shows a persistent
  * "Demo data" banner. Never remove that banner: results that look real
@@ -74,7 +74,7 @@ const QUERY_ID = '__query__';
 
 /**
  * Build a demo cascade. Honours the threshold sliders so the controls behave
- * correctly during UI work — dragging the cutoff genuinely changes the result.
+ * correctly during UI work -- dragging the cutoff genuinely changes the result.
  */
 export function demoOffTargets(params: {
 	smiles?: string;

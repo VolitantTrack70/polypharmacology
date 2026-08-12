@@ -8,13 +8,13 @@
 	let cy: any = null;
 	let selected = $state<GraphNode | null>(null);
 
-	// Colour encodes node kind. The cascade reads left-to-right in the layout,
-	// so the palette runs warm (query) to cool (pathway).
+	// Colour encodes node kind, desaturated to stay legible when printed
+	// or projected rather than to look bright on screen.
 	const PALETTE: Record<string, string> = {
-		query: '#e8590c',
-		compound: '#f08c00',
-		target: '#1971c2',
-		pathway: '#2f9e44'
+		query: '#a03a00',
+		compound: '#8a6d00',
+		target: '#14507a',
+		pathway: '#1f5c34'
 	};
 
 	onMount(async () => {
@@ -158,9 +158,7 @@
 		width: 100%;
 		height: 100%;
 		min-height: 480px;
-		background: #fbfbfc;
-		border: 1px solid #e9ecef;
-		border-radius: 8px;
+		background: #fdfdfc;
 		overflow: hidden;
 	}
 	.canvas {
@@ -169,74 +167,86 @@
 	}
 	.legend {
 		position: absolute;
-		bottom: 10px;
-		left: 10px;
+		bottom: 0;
+		left: 0;
 		display: flex;
-		gap: 12px;
-		font-size: 11px;
-		color: #495057;
-		background: rgba(255, 255, 255, 0.9);
-		padding: 6px 10px;
-		border-radius: 6px;
+		font-size: 10px;
+		color: #565c63;
+		background: #fff;
+		border-top: 1px solid #b8bcc2;
+		border-right: 1px solid #b8bcc2;
 	}
 	.chip {
 		display: flex;
 		align-items: center;
 		gap: 5px;
+		padding: 3px 9px;
+		border-right: 1px solid #dcdee1;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.chip:last-child {
+		border-right: 0;
 	}
 	.chip i {
-		width: 9px;
-		height: 9px;
-		border-radius: 50%;
+		width: 8px;
+		height: 8px;
 		display: inline-block;
 	}
 	.inspector {
 		position: absolute;
-		top: 10px;
-		right: 10px;
-		width: 240px;
+		top: 0;
+		right: 0;
+		width: 250px;
 		background: #fff;
-		border: 1px solid #dee2e6;
-		border-radius: 8px;
-		padding: 10px 12px;
-		font-size: 12px;
-		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+		border-left: 1px solid #b8bcc2;
+		border-bottom: 1px solid #b8bcc2;
+		padding: 8px 10px;
+		font-size: 11.5px;
 	}
 	.inspector header {
 		display: flex;
 		justify-content: space-between;
 		align-items: start;
 		gap: 8px;
-		margin-bottom: 8px;
+		margin-bottom: 6px;
+		padding-bottom: 5px;
+		border-bottom: 1px solid #dcdee1;
 	}
 	.inspector button {
 		border: none;
 		background: none;
 		cursor: pointer;
-		font-size: 16px;
+		font-size: 15px;
 		line-height: 1;
-		color: #868e96;
+		color: #565c63;
 	}
 	dl {
 		display: grid;
 		grid-template-columns: auto 1fr;
-		gap: 3px 10px;
+		gap: 2px 10px;
 		margin: 0;
 	}
 	dt {
-		color: #868e96;
+		color: #565c63;
+		font-size: 9.5px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding-top: 1px;
 	}
 	dd {
 		margin: 0;
 		word-break: break-word;
+		font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+		font-size: 10.5px;
 	}
 	.empty {
 		position: absolute;
 		inset: 0;
 		display: grid;
 		place-content: center;
-		color: #adb5bd;
-		font-size: 13px;
+		color: #8b9096;
+		font-size: 12px;
 		pointer-events: none;
 	}
 </style>
