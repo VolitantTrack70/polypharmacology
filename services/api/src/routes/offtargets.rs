@@ -44,6 +44,9 @@ pub struct OffTargetRequest {
     /// genuinely annotated to dozens of pathways -- ABL1 alone returns ~52.
     /// Returning all of them is correct and unreadable.
     pub max_pathways_per_target: Option<u32>,
+    /// ChEMBL assay-to-target confidence floor, 0-9. `binds_to` already
+    /// enforces >= 7; raise to 9 for direct single-protein assays only.
+    pub min_confidence: Option<i16>,
 }
 
 const PATHWAY_SCOPES: [&str; 3] = ["all", "domain", "specific"];
@@ -156,6 +159,7 @@ ranked AS (
               )
     WHERE b.max_pchembl >= $2
       AND ($3::text IS NULL OR t.organism = $3)
+      AND b.best_confidence >= $6
 )
 SELECT
     chembl_id, target_chembl_id, pref_name, organism,
@@ -307,6 +311,10 @@ pub async fn off_targets(
     // target wants "all of them", not an error.
     let max_pathways = req.max_pathways_per_target.unwrap_or(8).clamp(1, 500) as i64;
 
+    // binds_to already floors this at 7; anything lower is a no-op, so clamp
+    // rather than pretend a lower value would widen the result.
+    let min_confidence = req.min_confidence.unwrap_or(7).clamp(7, 9);
+
     // ---- Phase 1: similarity ------------------------------------------------
     let search = match (&req.smiles, &req.chembl_id) {
         (Some(s), _) if !s.trim().is_empty() => {
@@ -360,6 +368,7 @@ pub async fn off_targets(
         .bind(req.organism.as_deref())
         .bind(&scope)
         .bind(max_pathways)
+        .bind(min_confidence)
         .fetch_all(&state.db)
         .await?;
 

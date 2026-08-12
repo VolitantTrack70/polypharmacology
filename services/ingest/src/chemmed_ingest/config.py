@@ -57,8 +57,9 @@ class Thresholds:
 
     tanimoto: float = float(_env("DEFAULT_TANIMOTO_CUTOFF", "0.40"))
     pchembl: float = float(_env("DEFAULT_PCHEMBL_CUTOFF", "6.0"))
-    # ChEMBL assay-to-target confidence; >=7 means the assay is confidently
-    # attributed to a single protein target.
+    # ChEMBL assay-to-target confidence, 0-9. The chem.binds_to view applies a
+    # hard floor of 7 (see migration 002); this is the queryable floor on top,
+    # e.g. 9 for direct single-protein assays only.
     min_confidence: int = int(_env("MIN_CONFIDENCE_SCORE", "7"))
 
 

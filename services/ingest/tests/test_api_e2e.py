@@ -211,6 +211,29 @@ class TestPathwayScope:
         assert r.json()["error"]["code"] == "bad_request"
 
 
+class TestConfidenceFilter:
+    def test_raising_confidence_narrows_results(self):
+        """MIN_CONFIDENCE_SCORE was config that nothing read; binds_to hardcodes
+        a floor of 7. It is now a real query parameter on top of that floor."""
+        counts = [
+            post(
+                "/offtargets",
+                {"smiles": IMATINIB, "tanimoto": 0.40, "min_confidence": c},
+            ).json()["stats"]["targets"]
+            for c in (7, 8, 9)
+        ]
+        assert counts == sorted(counts, reverse=True)
+        assert counts[0] > counts[-1], "confidence 9 should be stricter than 7"
+
+    def test_below_the_view_floor_is_clamped_not_widened(self):
+        """binds_to already excludes <7, so a lower request cannot widen the
+        result. It must clamp rather than imply otherwise."""
+        low = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40, "min_confidence": 0})
+        base = post("/offtargets", {"smiles": IMATINIB, "tanimoto": 0.40, "min_confidence": 7})
+        assert low.status_code == 200
+        assert low.json()["stats"]["targets"] == base.json()["stats"]["targets"]
+
+
 class TestErrors:
     def test_missing_query_is_400(self):
         r = post("/offtargets", {"tanimoto": 0.4})

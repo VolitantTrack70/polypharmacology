@@ -41,6 +41,10 @@ CREATE INDEX IF NOT EXISTS idx_pathway_hierarchy_child  ON pathway_hierarchy (ch
 --   * confidence_score < 7  -- assay not confidently tied to a single target
 --   * standard_relation '>' -- "activity was worse than X", i.e. a non-binder
 --   * rows flagged with a data_validity_comment
+--
+-- 7 is a hard floor baked into the view. best_confidence is retained so
+-- callers can raise it per query (the API's min_confidence parameter); it
+-- cannot be lowered without rebuilding this view.
 -- ---------------------------------------------------------------------------
 DROP MATERIALIZED VIEW IF EXISTS binds_to CASCADE;
 CREATE MATERIALIZED VIEW binds_to AS
