@@ -169,8 +169,10 @@ export function demoOffTargets(params: {
 			similar_compounds: analogues.length,
 			targets: seenTargets.size,
 			pathways: seenPathways.size,
-			compounds_scanned: 2_409_270,
-			search_ms: 143
+			compounds_scanned: 2_474_571,
+			search_ms: 143,
+			similar_matched: analogues.length,
+			truncated: false
 		},
 		nodes,
 		edges

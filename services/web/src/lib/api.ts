@@ -57,6 +57,9 @@ export interface OffTargetResponse {
 		pathways: number;
 		compounds_scanned: number;
 		search_ms: number;
+		/** Matches before `limit`. Greater than similar_compounds means a subset. */
+		similar_matched: number;
+		truncated: boolean;
 	};
 	nodes: GraphNode[];
 	edges: GraphEdge[];
@@ -110,6 +113,11 @@ export interface OffTargetParams {
 	pchembl?: number;
 	limit?: number;
 	organism?: string;
+	/** 'all' | 'domain' | 'specific' */
+	pathway_scope?: string;
+	max_pathways_per_target?: number;
+	/** ChEMBL assay confidence floor, 7-9. */
+	min_confidence?: number;
 }
 
 /**

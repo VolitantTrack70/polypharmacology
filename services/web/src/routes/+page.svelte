@@ -20,6 +20,69 @@
 	let error = $state<string | null>(null);
 	let sortBy = $state<'affinity' | 'similarity'>('affinity');
 
+	// Display filters. These never refetch -- the API returns the complete
+	// result and the canvas shows a subset of it. The table stays complete.
+	const QUERY_ID = '__query__';
+	let topTargets = $state(25);
+	let showCompounds = $state(false);
+	let showPathways = $state(true);
+	let targetFilter = $state('');
+
+	/** Best observed affinity per target, used to rank what to display. */
+	let targetAffinity = $derived.by(() => {
+		const m = new Map<string, number>();
+		for (const e of result?.edges ?? []) {
+			if (e.kind === 'binds_to') {
+				m.set(e.target, Math.max(m.get(e.target) ?? 0, e.pchembl ?? 0));
+			}
+		}
+		return m;
+	});
+
+	let rankedTargets = $derived.by(() => {
+		const q = targetFilter.trim().toLowerCase();
+		return (result?.nodes ?? [])
+			.filter((n) => n.kind === 'target')
+			.filter((n) => !q || n.label.toLowerCase().includes(q))
+			.sort((a, b) => (targetAffinity.get(b.id) ?? 0) - (targetAffinity.get(a.id) ?? 0));
+	});
+
+	let displayGraph = $derived.by(() => {
+		if (!result) return { nodes: [], edges: [] };
+
+		const shown = topTargets > 0 ? rankedTargets.slice(0, topTargets) : rankedTargets;
+		const keepTargets = new Set(shown.map((t) => t.id));
+
+		const keepCompounds = new Set<string>();
+		const keepPathways = new Set<string>();
+		for (const e of result.edges) {
+			if (showCompounds && e.kind === 'binds_to' && keepTargets.has(e.target)) {
+				keepCompounds.add(e.source);
+			}
+			if (showPathways && e.kind === 'participates_in' && keepTargets.has(e.source)) {
+				keepPathways.add(e.target);
+			}
+		}
+
+		const keep = new Set([QUERY_ID, ...keepTargets, ...keepCompounds, ...keepPathways]);
+		const nodes = result.nodes.filter((n) => keep.has(n.id));
+		const edges = result.edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+
+		// With compounds hidden the query node would be orphaned, so collapse
+		// query -> compound -> target into a direct edge carrying best affinity.
+		if (!showCompounds) {
+			for (const t of shown) {
+				edges.push({
+					source: QUERY_ID,
+					target: t.id,
+					kind: 'binds_to',
+					pchembl: targetAffinity.get(t.id)
+				});
+			}
+		}
+		return { nodes, edges };
+	});
+
 	// 0.85 is the value intuition suggests and it returns essentially nothing
 	// on ECFP4. Warn rather than block -- it's legitimate for near-duplicates.
 	let thresholdWarning = $derived(
@@ -208,10 +271,65 @@
 						<span>{result.stats.compounds_scanned.toLocaleString()} scanned</span>
 					</div>
 				</section>
+
+				{#if result.stats.truncated}
+					<p class="hint">
+						<strong>Showing a subset.</strong>
+						{result.stats.similar_matched.toLocaleString()} compounds matched at Tanimoto &ge;
+						{result.query.tanimoto_cutoff.toFixed(2)}, but the query limit cut it short — some
+						off-targets are missing. Raise the limit to see them all.
+					</p>
+				{/if}
+
+				<section class="display">
+					<div class="display-head">
+						<h2>Graph display</h2>
+						<span class="muted">
+							{Math.min(topTargets || rankedTargets.length, rankedTargets.length)} of
+							{targetFilter.trim()
+								? `${rankedTargets.length} matching`
+								: result.stats.targets} targets · {displayGraph.nodes.length} nodes
+						</span>
+					</div>
+					<p class="muted note">
+						Filters the canvas only. The table below always lists every target found.
+					</p>
+
+					<div class="display-controls">
+						<label>
+							<span>Top targets by affinity</span>
+							<select bind:value={topTargets}>
+								<option value={10}>10</option>
+								<option value={25}>25</option>
+								<option value={50}>50</option>
+								<option value={0}>All ({result.stats.targets})</option>
+							</select>
+						</label>
+
+						<label>
+							<span>Filter by name</span>
+							<input type="text" placeholder="e.g. kinase" bind:value={targetFilter} />
+						</label>
+
+						<label class="check">
+							<input type="checkbox" bind:checked={showCompounds} />
+							<span>Show similar compounds</span>
+						</label>
+
+						<label class="check">
+							<input type="checkbox" bind:checked={showPathways} />
+							<span>Show pathways</span>
+						</label>
+					</div>
+
+					{#if rankedTargets.length === 0 && targetFilter.trim()}
+						<p class="warn">No target matches “{targetFilter}”.</p>
+					{/if}
+				</section>
 			{/if}
 
 			<section class="graph">
-				<GraphCanvas nodes={result?.nodes ?? []} edges={result?.edges ?? []} />
+				<GraphCanvas nodes={displayGraph.nodes} edges={displayGraph.edges} />
 			</section>
 
 			{#if result && result.stats.similar_compounds === 0}
@@ -534,6 +652,64 @@
 	}
 	.graph {
 		height: 500px;
+	}
+	.display {
+		padding: 12px 14px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: var(--panel);
+	}
+	.display-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.display h2 {
+		font-size: 13px;
+		margin: 0;
+	}
+	.muted {
+		color: var(--muted);
+		font-size: 11px;
+	}
+	.note {
+		margin: 3px 0 10px;
+	}
+	.display-controls {
+		display: flex;
+		gap: 18px;
+		flex-wrap: wrap;
+		align-items: end;
+	}
+	.display-controls label {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 11.5px;
+		color: var(--muted);
+	}
+	.display-controls input[type='text'],
+	.display-controls select {
+		font: inherit;
+		font-size: 12px;
+		padding: 5px 7px;
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		background: #fff;
+		color: var(--ink);
+		min-width: 150px;
+	}
+	.display-controls .check {
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
+		padding-bottom: 6px;
+		cursor: pointer;
+	}
+	.display-controls .check input {
+		accent-color: var(--accent);
 	}
 	.hint {
 		margin: 0;
