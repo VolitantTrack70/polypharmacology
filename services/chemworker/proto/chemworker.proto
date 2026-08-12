@@ -59,6 +59,9 @@ message SimilaritySearchResponse {
   // prune saved.
   uint32 considered           = 4;
   float  elapsed_ms           = 5;
+  // Compounds scoring >= threshold before `limit` was applied. Greater than
+  // hits.length means the response is truncated.
+  uint32 total_matches        = 6;
 }
 
 message StatusRequest {}

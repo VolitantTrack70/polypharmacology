@@ -104,6 +104,29 @@ class TestFingerprintIndex:
         with pytest.raises(ValueError, match="threshold"):
             index.search(make_fp({1}), threshold=0.0)
 
+    def test_detailed_reports_candidates_not_hit_count(self, index):
+        """`considered` used to be set to len(hits), which said nothing about
+        how much the popcount bound actually pruned."""
+        r = index.search_detailed(make_fp({1, 2, 3, 4}), threshold=0.9)
+        assert len(r.hits) == 1
+        assert r.candidates >= len(r.hits)
+        assert r.searched == len(index)
+
+    def test_total_matches_exposes_truncation(self, index):
+        full = index.search_detailed(make_fp({1, 2, 3, 4}), threshold=0.0001, limit=None)
+        capped = index.search_detailed(make_fp({1, 2, 3, 4}), threshold=0.0001, limit=1)
+
+        assert capped.total_matches == full.total_matches
+        assert len(capped.hits) == 1
+        assert capped.truncated is True
+        assert full.truncated is False
+
+    def test_empty_result_still_reports_scan_size(self, index):
+        r = index.search_detailed(make_fp({1900, 1901}), threshold=0.9)
+        assert r.hits == []
+        assert r.total_matches == 0
+        assert r.searched == len(index)
+
     def test_roundtrip_through_disk(self, index, tmp_path):
         path = tmp_path / "idx.npz"
         index.save(path)

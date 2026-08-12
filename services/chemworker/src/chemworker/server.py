@@ -95,13 +95,25 @@ class ChemWorkerServicer(pb_grpc.ChemWorkerServicer):
             return None
 
         limit = min(request.limit or 250, MAX_LIMIT)
-        hits = self._index.search(query_fp, threshold=threshold, limit=limit)
+        result = self._index.search_detailed(query_fp, threshold=threshold, limit=limit)
+
+        if result.truncated:
+            log.info(
+                "truncated: %d matched at >=%.2f, returning top %d",
+                result.total_matches,
+                threshold,
+                len(result.hits),
+            )
 
         return pb.SimilaritySearchResponse(
-            hits=[pb.SimilarityHit(chembl_id=h.chembl_id, tanimoto=h.tanimoto) for h in hits],
+            hits=[
+                pb.SimilarityHit(chembl_id=h.chembl_id, tanimoto=h.tanimoto)
+                for h in result.hits
+            ],
             canonical_smiles=canonical,
-            searched=len(self._index),
-            considered=len(hits),
+            searched=result.searched,
+            considered=result.candidates,
+            total_matches=result.total_matches,
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
         )
 

@@ -43,6 +43,21 @@ class SimilarityHit:
     tanimoto: float
 
 
+@dataclass(frozen=True)
+class SearchResult:
+    """Hits plus what the scan actually did, so callers can tell truncation
+    and pruning apart from a genuinely small result."""
+
+    hits: list[SimilarityHit]
+    searched: int
+    candidates: int
+    total_matches: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.total_matches > len(self.hits)
+
+
 class FingerprintIndex:
     """In-memory packed fingerprint matrix with exact Tanimoto search.
 
@@ -120,10 +135,21 @@ class FingerprintIndex:
         threshold: float = 0.40,
         limit: int | None = 500,
     ) -> list[SimilarityHit]:
-        """Return every compound scoring >= `threshold`, best first.
+        """Compounds scoring >= `threshold`, best first."""
+        return self.search_detailed(query_fp, threshold, limit).hits
 
-        `limit` truncates the *result*, not the scan, so results are always the
-        globally best matches rather than the first ones encountered.
+    def search_detailed(
+        self,
+        query_fp: bytes,
+        threshold: float = 0.40,
+        limit: int | None = 500,
+    ) -> SearchResult:
+        """As `search`, but also reports how many compounds survived the
+        popcount bound and how many matched in total before `limit`.
+
+        `limit` truncates the *result*, not the scan, so hits are always the
+        globally best matches -- but callers need `total_matches` to know that
+        truncation happened at all.
         """
         if not 0.0 < threshold <= 1.0:
             raise ValueError(f"threshold must be in (0, 1], got {threshold}")
@@ -134,15 +160,16 @@ class FingerprintIndex:
         q = np.ascontiguousarray(q).view(np.uint64)
         q_pop = int(_popcount_u64(q))
 
+        empty = SearchResult(hits=[], searched=len(self), candidates=0, total_matches=0)
         if q_pop == 0:
-            return []  # e.g. a single bare atom; no bits set, no meaningful match
+            return empty  # e.g. a bare atom: no bits set, no meaningful match
 
         # Exact popcount bound -- prune before touching any bits.
         lo = q_pop * threshold
         hi = q_pop / threshold
         candidates = np.flatnonzero((self.popcounts >= lo) & (self.popcounts <= hi))
         if candidates.size == 0:
-            return []
+            return empty
 
         inter = _popcount_u64(self.matrix[candidates] & q)
         union = self.popcounts[candidates].astype(np.int32) + q_pop - inter
@@ -151,16 +178,23 @@ class FingerprintIndex:
 
         keep = np.flatnonzero(scores >= threshold)
         if keep.size == 0:
-            return []
+            return SearchResult(
+                hits=[], searched=len(self), candidates=int(candidates.size), total_matches=0
+            )
 
         order = keep[np.argsort(-scores[keep], kind="stable")]
         if limit is not None:
             order = order[:limit]
 
-        return [
-            SimilarityHit(chembl_id=str(self.ids[candidates[i]]), tanimoto=float(scores[i]))
-            for i in order
-        ]
+        return SearchResult(
+            hits=[
+                SimilarityHit(chembl_id=str(self.ids[candidates[i]]), tanimoto=float(scores[i]))
+                for i in order
+            ],
+            searched=len(self),
+            candidates=int(candidates.size),
+            total_matches=int(keep.size),
+        )
 
     def __len__(self) -> int:
         return len(self.ids)
