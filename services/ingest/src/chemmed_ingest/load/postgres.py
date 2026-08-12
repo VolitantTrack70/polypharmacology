@@ -175,6 +175,31 @@ def load_table(
     return inserted
 
 
+# Every table holding ingested source data, children first.
+LOADABLE_TABLES = [
+    "activity",
+    "compound_fingerprint",
+    "target_component",
+    "protein_pathway",
+    "pathway_hierarchy",
+    "compound",
+    "target",
+    "protein",
+    "pathway",
+]
+
+
+def truncate_all(conn: psycopg.Connection) -> None:
+    """Empty every ingested table. Used before a load that must not merge with
+    what is already there -- e.g. replacing fixture data with a real release,
+    where reused identifiers would otherwise silently mean different things."""
+    with conn.cursor() as cur:
+        tables = ", ".join(f"chem.{t}" for t in LOADABLE_TABLES)
+        log.info("truncating %s", tables)
+        cur.execute(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
+    conn.commit()
+
+
 def record_release(
     conn: psycopg.Connection,
     source: str,

@@ -372,12 +372,22 @@ def migrate() -> None:
 
 
 @app.command(name="load")
-def load_cmd(release: str = typer.Option("35")) -> None:
+def load_cmd(
+    release: str = typer.Option("35"),
+    fresh: bool = typer.Option(
+        False, help="Empty every ingested table first. Required when replacing fixture data."
+    ),
+) -> None:
     """COPY the Parquet into Postgres, then refresh derived views."""
     _setup_logging()
     import psycopg
 
-    from chemmed_ingest.load.postgres import load_table, record_release, refresh_derived
+    from chemmed_ingest.load.postgres import (
+        load_table,
+        record_release,
+        refresh_derived,
+        truncate_all,
+    )
 
     # Order matters twice over: parents before children for the FK guards, and
     # each table is stamped with the release of the source it actually came
@@ -397,6 +407,8 @@ def load_cmd(release: str = typer.Option("35")) -> None:
 
     counts: dict[str, int] = {}
     with psycopg.connect(DATABASE_URL) as conn:
+        if fresh:
+            truncate_all(conn)
         releases = {
             "chembl": record_release(conn, "chembl", release, CHEMBL_URL.format(v=release)),
             "reactome": record_release(
@@ -511,6 +523,7 @@ def run_all(
     release: str = typer.Option("35"),
     limit: int | None = typer.Option(None, help="Row cap per table. Use for a fast smoke run."),
     skip_download: bool = typer.Option(False),
+    fresh: bool = typer.Option(False, help="Empty every ingested table before loading."),
 ) -> None:
     """Run the full pipeline end to end.
 
@@ -523,7 +536,7 @@ def run_all(
     parse(release=release, limit=limit, species="Homo sapiens")
     fingerprint(workers=0, limit=limit)
     migrate()
-    load_cmd(release=release)
+    load_cmd(release=release, fresh=fresh)
     index(source="parquet")
     console.print("\n[bold green]pipeline complete[/bold green]")
     console.print(f"config: {FP.signature}, default cutoff {THRESHOLDS.tanimoto}")
