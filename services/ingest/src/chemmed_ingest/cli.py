@@ -514,13 +514,9 @@ def run_all(
 ) -> None:
     """Run the full pipeline end to end.
 
-    EVERY argument to each stage is passed explicitly. A Typer command invoked
-    as a plain Python function does not get its declared defaults -- it gets
-    `typer.models.OptionInfo` objects, which then fail deep inside the stage.
-    Omitting `source` here made `index()` blow up with
-    "unknown source <OptionInfo object at 0x...>" after the load had already
-    finished. Adding a new Option to any stage below silently reintroduces
-    that, which is what `test_run_all_passes_real_values` guards.
+    Every stage argument is passed explicitly: a Typer command called as a
+    plain function receives OptionInfo objects, not its declared defaults.
+    Guarded by test_cli_wiring.py.
     """
     if not skip_download:
         download(source="all", release=release, verify=True)

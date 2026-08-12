@@ -81,13 +81,7 @@ def _path_env(key: str, default: Path) -> Path:
 class Paths:
     raw: Path = _path_env("DATA_RAW_DIR", REPO_ROOT / "data" / "raw")
     processed: Path = _path_env("DATA_PROCESSED_DIR", REPO_ROOT / "data" / "processed")
-    # The packed fingerprint matrix, saved as .npz by FingerprintIndex.save().
-    #
-    # Previously named FPSIM2_INDEX_PATH and defaulted to .h5, which was wrong
-    # twice over: FPSim2 is an optional dependency we do not currently use, and
-    # the file is NumPy's format. Every call site was calling .with_suffix(".npz")
-    # to compensate, which meant a caller who set the variable to a real .h5
-    # path would have been silently redirected somewhere else.
+    # Packed fingerprint matrix, written as .npz by FingerprintIndex.save().
     fingerprint_index: Path = _path_env(
         "FINGERPRINT_INDEX_PATH", REPO_ROOT / "data" / "processed" / "chembl_morgan_2048.npz"
     )

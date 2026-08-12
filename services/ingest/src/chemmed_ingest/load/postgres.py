@@ -88,17 +88,9 @@ def load_table(
 
     with conn.cursor() as cur:
         cur.execute(f"DROP TABLE IF EXISTS {staging}")
-        # `CREATE TABLE AS SELECT ... WITH NO DATA`, not `LIKE`.
-        #
-        # `LIKE` copies NOT NULL constraints but NOT defaults, which is the
-        # worst possible combination: a column such as compound.withdrawn_flag
-        # (NOT NULL DEFAULT FALSE) becomes mandatory in staging with nothing to
-        # fill it, so any Parquet that omits the column fails the COPY.
-        #
-        # AS SELECT gives the same column types with no constraints at all.
-        # Staging should accept whatever the Parquet holds; validation happens
-        # on the way into the real table, where the real defaults do apply
-        # because the INSERT only names columns the Parquet actually has.
+        # AS SELECT, not LIKE: LIKE copies NOT NULL but not defaults, so any
+        # Parquet omitting a NOT NULL DEFAULT column would fail the COPY.
+        # Staging takes anything; the real table's defaults apply on insert.
         cur.execute(
             f"CREATE UNLOGGED TABLE {staging} AS "
             f"SELECT * FROM chem.{table} WITH NO DATA"
@@ -151,16 +143,12 @@ def load_table(
                 select_cols += f", {int(release_id)}"
                 stamped_release = True
 
-        # Upsert rather than DO NOTHING. Re-ingesting a newer ChEMBL release
-        # must actually refresh existing rows -- with DO NOTHING, a corrected
-        # structure or a new clinical phase would be silently ignored forever.
-        # Pure join tables have no non-key columns, so they fall back to
-        # DO NOTHING (an empty SET clause is a syntax error).
+        # Upsert, so re-ingesting a newer release refreshes existing rows.
+        # Join tables have no non-key columns and fall back to DO NOTHING
+        # (an empty SET clause is a syntax error).
         updatable = [c for c in columns if c not in spec["pk"]]
-        # release_id must be refreshed too. It is not one of the Parquet
-        # columns, so without this a row keeps whichever release first loaded
-        # it forever -- and provenance that is silently stale is worse than no
-        # provenance, because it looks authoritative.
+        # release_id isn't a Parquet column, so add it explicitly or a row
+        # keeps whichever release first loaded it.
         if stamped_release:
             updatable.append("release_id")
         if updatable:

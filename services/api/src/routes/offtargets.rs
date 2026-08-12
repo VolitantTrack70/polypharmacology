@@ -117,14 +117,9 @@ pub struct CascadeRow {
 
 pub const QUERY_NODE_ID: &str = "__query__";
 
-/// The scope predicate sits in the LEFT JOIN condition, not the WHERE clause.
-/// In the WHERE clause it would discard targets whose pathways were all
-/// filtered out, turning "this target has no pathway at this level" into
-/// "this target does not exist".
-///
-/// Likewise the per-target cap is applied via ROW_NUMBER in an outer filter
-/// that explicitly keeps `reactome_id IS NULL` rows, so an unannotated target
-/// still comes back as a node.
+/// Scope predicate lives in the LEFT JOIN, and the per-target cap keeps
+/// `reactome_id IS NULL` rows -- otherwise a target whose pathways were all
+/// filtered out would vanish entirely instead of appearing unannotated.
 const CASCADE_SQL: &str = r#"
 WITH hits AS (
     SELECT * FROM UNNEST($1::text[]) AS t(chembl_id)
@@ -175,14 +170,8 @@ pub struct Graph {
     pub n_pathways: usize,
 }
 
-/// Fold `compound x target x pathway` rows into a node/edge graph.
-///
-/// The SQL join fans out: one row per (compound, target, pathway) combination,
-/// so a compound binding 3 targets that sit in 20 pathways each arrives as 60
-/// rows describing 1 compound, 3 targets and up to 60 pathways. Everything
-/// here is deduplication.
-///
-/// Kept separate from the handler so it can be tested without a database.
+/// Fold the fanned-out `compound x target x pathway` rows into a deduplicated
+/// graph. Separate from the handler so it is testable without a database.
 pub fn build_graph(rows: &[CascadeRow], similarity: &HashMap<String, f32>) -> Graph {
     let mut nodes = vec![Node {
         id: QUERY_NODE_ID.to_string(),

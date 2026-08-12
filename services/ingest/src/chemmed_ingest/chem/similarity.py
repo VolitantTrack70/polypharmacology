@@ -1,37 +1,16 @@
 """Query-time Tanimoto similarity search over the full compound set.
 
-WHY THIS EXISTS INSTEAD OF PRECOMPUTED EDGES
---------------------------------------------
-The original design called for materialised `IS_STRUCTURALLY_SIMILAR_TO`
-edges. ChEMBL holds ~2.4M distinct structures, so all-pairs is ~2.9e12
-comparisons -- infeasible to compute and pointless to store.
+Similarity is computed per query rather than stored as edges: all-pairs over
+2.4M ChEMBL structures is ~2.9e12 comparisons, and the packed matrix is only
+~600MB in RAM. This also makes the threshold a live query parameter.
 
-It is also unnecessary. 2.4M x 2048 bits packs to ~600MB of uint64, which sits
-comfortably in RAM. A vectorised popcount scan over that runs in well under a
-second, which means similarity becomes a *live* query parameter: the UI's
-threshold slider re-searches instead of being locked to whatever cutoff the
-ingest happened to bake in.
-
-ALGORITHM
----------
 Tanimoto over bit vectors:   Ts(A,B) = c / (a + b - c)
 where a = popcount(A), b = popcount(B), c = popcount(A AND B).
 
-The scan is preceded by a cheap exact bound. Since c <= min(a, b) and
-(a + b - c) >= max(a, b):
-
-    Ts(A,B) <= min(a, b) / max(a, b)
-
-so any compound whose popcount falls outside [t*a, a/t] cannot reach threshold
-t and is skipped without touching its bits.
-
-How much that prune actually saves depends entirely on the threshold, and it is
-easy to overestimate. Measured over 2.4M drug-like fingerprints it discards
-68.6% at t=0.85 but *nothing* at t=0.40, because drug-like molecules have
-similar bit counts and min/max rarely drops below ~0.44. The bound is free and
-exact so it stays, but it is not what makes this fast -- a vectorised popcount
-over 600 MB is just quick (~400 ms at the default threshold).
-See docs/decisions/0001 and benchmarks/bench_similarity.py.
+An exact popcount bound runs first: Ts(A,B) <= min(a,b)/max(a,b), so anything
+outside [t*a, a/t] is skipped untouched. It is free but not what makes this
+fast -- measured, it prunes 68.6% at t=0.85 and nothing at t=0.40, since
+drug-like molecules have similar bit counts. See docs/decisions/0001.
 """
 
 from __future__ import annotations
