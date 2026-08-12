@@ -45,10 +45,23 @@ and is the right way to validate the pipeline before committing to the full dump
 
 ## Scale expectations
 
-Full ChEMBL is roughly 5 GB compressed and expands to tens of GB. Parsing plus
-fingerprinting ~2.4M structures takes on the order of 20–60 minutes across a
-typical multi-core desktop. The `--limit` flag exists so you are never blocked on
-that while iterating.
+Measured on ChEMBL 35, 12-core desktop:
+
+| | |
+|---|---|
+| Tarball | 4.99 GB |
+| Extracted SQLite | 26 GB |
+| Compounds / structures | 2,496,335 / 2,474,590 |
+| Activities (all) | 21,123,501 |
+| Targets | 16,003 |
+| Parse (compounds) | ~50 s |
+
+Use `--limit` to iterate without paying for the full run.
+
+The download is resumable and checksum-verified. Extraction is not — if it is
+interrupted you get a truncated database that only reveals itself as
+`database disk image is malformed`. Delete `data/raw/chembl_<release>/` and
+re-run `download`; the tarball is reused.
 
 ## Notes that will save you a debugging session
 
